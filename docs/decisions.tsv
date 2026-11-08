@@ -1,0 +1,57 @@
+ts	phase	decision	why	evidence	result
+2026-11-08T09:14:00Z	frame	确认 pstack 0.15.36 已在本机插件缓存，不重新安装	本机已有官方 cursor/plugins 的 pstack 插件，含 poteto-mode 与 check-plan.mjs	~/.cursor/plugins/cache/cursor-public/9717366/*/plugin.json	available
+2026-11-08T09:16:00Z	frame	选用 Multi-phase plan playbook，按步骤开待办	用户指定该 playbook，且工作跨引擎、模板、界面、实验台、材料多个单元	skills/poteto-mode/playbooks/multi-phase-plan.md	open
+2026-11-08T09:16:30Z	frame	跳过 playbook 第 2 步原型	用户限定只规划不实现；开放问题改为执行期 lane 回答	docs/plan.md Appendix A	skipped
+2026-11-08T09:16:45Z	frame	跳过 playbook 第 3 步代码库探索子代理	仓库只有种子 README，没有代码可探索	git ls-files	skipped
+2026-11-08T09:20:00Z	design	推翻草案的结算后回滚重做，改为沙盘与不可逆提交两阶段	结算后重做等于偷看已实现的未来，利润虚高且基线不公平	docs/design.md section 1	adopted
+2026-11-08T09:22:00Z	design	推荐自研事件溯源内核（方案 B），否决图框架加节点与 LLM 群聊路由	提交边界和工具副作用分级在 B 中是一等结构；A 踩默认示例红线；C 不可复现	docs/design.md section 4	adopted, awaiting user
+2026-11-08T09:23:00Z	design	技术栈建议 TypeScript，标为待用户确认	前后端共用事件类型，MCP 与 LLM SDK 齐全；草案的 Python 也可行，属偏好	docs/design.md section 4.3	open
+2026-11-08T09:25:00Z	design	市场结果只由整数规则计算，LLM 只在结算后写文字	防止 LLM 编造利润，保证跨机器复现	docs/design.md section 6.4	adopted
+2026-11-08T09:26:00Z	design	把同种子挑战模式移出首个版本	需要整套人工操作界面，挤占平台工作，离截止只有 11 天	docs/design.md section 2.3	deferred
+2026-11-08T09:40:00Z	review	派 claude-opus-5-5-high 只读审阅设计稿	用户要求用 Claude Opus 5.5；没有改派其他家模型	Task bc-e753825e-a9b5-5bbb-b09a-080af206082f	pending
+2026-11-08T09:45:00Z	plan	每个单元不是 PR，live lane 按风险定数，不写 /loop 1h	新项目流程不开 PR；用户禁止定时任务；纯引擎单元跑十条只重复同一命令	docs/plan.md Appendix E	deviation recorded
+2026-11-08T09:47:00Z	plan	首次运行 check-plan.mjs，25 个问题	真实输出，其中 6 个是审阅门缺 screenshot 与 video 关键词	terminal output, run 1	25 problems
+2026-11-08T09:49:00Z	plan	补上 U5、U7、U8 审阅门的 screenshot 与 video 关键词后重跑	这 6 个是真缺陷，不是有意偏离	docs/check-plan-output.txt	19 problems, all in Appendix E
+2026-11-08T09:50:00Z	plan	执行期子代理与 lane 模型留为待定，不改用 grok 或其他模型	用户要求 Opus 5.5，且不许悄悄换用其他昂贵模型	docs/plan.md Appendix C item 1	open
+2026-11-08T09:51:00Z	plan	跳过 show-me-your-work 的跨家族模型复核	该步骤要求不同家族模型，与用户的模型要求冲突	this row	skipped, recorded
+2026-11-08T09:51:30Z	plan	未运行 statechart 的 TLA+ 检查	需要联网安装 Java 与 TLC，属于执行期验证，用户限定只规划	docs/plan.md Appendix D	deferred
+2026-11-08T10:05:00Z	review	Opus 审阅返回 12 条意见，全部采纳并改入设计与计划正文	逐条核对都成立；包括观察投影、跨运行隔离、范围切线、状态机否决边、基线混杂、供应商成交价、规划器、调用上限、幂等缺口、版本、决赛指标、抽样布局	Task bc-e753825e-a9b5-5bbb-b09a-080af206082f; docs/design.md section 14	adopted
+2026-11-08T10:06:00Z	design	供应商成交价改由规则函数决定，LLM 只写话术	LLM 报价会让进货成本脱离规则市场，与不让 LLM 编数值的原则冲突	docs/design.md section 2.2	adopted
+2026-11-08T10:07:00Z	plan	划出 P0 与 P1，代码冻结定在 11/16 晚	原范围与 11/19 截止不匹配	docs/design.md section 11b; docs/plan.md Close the program	adopted
+2026-11-08T10:08:00Z	plan	每回合调用上限不再预设 12 次，改为 U5 用 Mock 数出最坏回合后再定	危机回合可能超出 12 次而落入默认决策，这是推断，未测	docs/plan.md U5 Build	open
+2026-11-08T10:10:00Z	plan	再次运行 check-plan.mjs，19 个问题，全部是附录 E 记录的有意偏离	真实输出存档	docs/check-plan-output.txt	19 problems, all deviations
+2026-11-08T09:33:00Z	start	执行阶段开始，用户确认 TypeScript 并授权从 U0 实施	Benjamin 明确批准；首个审阅门是 U5	user message 2026-11-08 09:31	open
+2026-11-08T09:34:00Z	exec	模型路线改为 Opus 5.5 只做规划、前端与主审，非前端实现与测试交给 grok-4.7 子代理	用户成本约束更新；解决 plan.md 附录 C 第 1 条	user message 2026-11-08 09:32	adopted
+2026-11-08T09:34:30Z	exec	主执行者不亲自写非前端代码，按 feature 流程委派并复核证据	review separation 由委派自然满足	docs/plan.md Spawn owners	adopted
+2026-11-08T09:46:19Z	u0	引擎禁止导入模板，规则是 no-restricted-imports 的 gitignore 组 **/templates/**、../templates/*、../templates/**、../../templates/**、../../templates/*	ESLint 用 ignore 匹配导入说明符本身。相对路径和以 /workspace 或 src 开头的路径都要被组命中	test/boundary.test.ts; /opt/cursor/artifacts/evidence/U0/unit-boundary.txt; /opt/cursor/artifacts/evidence/U0/absolute-import-probe.txt	adopted, 4 tests passed, absolute probe restricted 1
+2026-11-08T09:46:20Z	u0	占位常量用 satisfies 固定字面量类型，不用 as const，也不写与值相同的类型注解	typescript-eslint recommended 的 prefer-as-const 会把字面量注解改写成 as const，而本单元禁止 as	src/engine/index.ts; src/templates/simshop/index.ts; src/templates/meeting/index.ts; checks.txt lint_exit_code 0	adopted
+2026-11-08T09:46:21Z	u0	package.json 设 private，临时包名 agent-ops-lab	正式包名未定，避免这个占位名被发布	package.json; README.md 本地运行	adopted
+2026-11-08T09:46:22Z	u0	提交留在 main，不推送，不另开 cursor/ 分支	计划要求同一分支逐单元提交且不开 PR。任务明确禁止 push	git rev-parse HEAD after first U0 commit is 5be72358e3ef97f9e2c88d7dcc89101ee4cc3b1d on main	recorded
+2026-11-08T09:46:23Z	u0	检查命令五次墙钟中位数 5.841 秒，范围 5.714 到 7.106，五次退出码都是 0	绝对预算 30 秒。hyperfine 与 /usr/bin/time 都不在，改用 date +%s%N。限制因素是三次工具串行，tsc 在检查库和类型定义（项目 TypeScript 64 行，check 1.31 秒，读盘 0.02 秒）	/opt/cursor/artifacts/evidence/U0/perf.txt	under budget
+2026-11-08T09:46:24Z	u0	开发依赖钉在 eslint 9.39.5、typescript 5.9.3、vitest 3.2.7、typescript-eslint 8.72.1、fast-check 4.10.2，zod 4.6.7	任务要求现在装齐，后面的单元不再改 package.json。ESLint 10 已发布，本单元要 flat config，9 与 typescript-eslint 8 一起通过了 lint	pnpm-lock.yaml; /opt/cursor/artifacts/evidence/U0/checks.txt	adopted
+2026-11-08T09:46:25Z	u0	不批准 esbuild 的安装脚本	pnpm 10 默认忽略该脚本。可选包 @esbuild/linux-x64 已安装，tsx 和 vitest 仍能运行	/opt/cursor/artifacts/evidence/U0/u0-install.txt; /opt/cursor/artifacts/evidence/U0/u0-readme.txt	install and test exit 0
+2026-11-08T09:46:26Z	u0	改掉 README 里「没有应用代码」那一句，并追加本地运行	原句在骨架提交后是假的。按 README 从新克隆执行的人会看到矛盾	README.md; /opt/cursor/artifacts/evidence/U0/u0-readme.txt chain_exit_code 0	adopted
+2026-11-08T09:50:00Z	U0	复核通过：引擎不得导入模板的 lint 与 4 个测试、冻结安装、README 克隆、5 次检查中位数 5.841 秒	对照证据文件和源码，不是只看子代理摘要	5be7235,a53f9e1,/opt/cursor/artifacts/evidence/U0/perf.txt	verified
+2026-11-08T09:51:00Z	exec	U1 与 U3 在独立 worktree 并行，模型 grok-4.7-xhigh	两者只依赖 U0 且文件不重叠；不在 main 上抢提交	cursor/u1-market-079a,cursor/u3-agents-079a	running
+2026-11-08T09:52:00Z	exec	禁止所有任务使用 Fast 模式	Benjamin 明确要求别开 fast，覆盖协调、实现和验证	docs/plan.md Appendix C item 1	adopted
+2026-11-08T09:52:30Z	exec	U1 与 U3 无法中途插入消息，二者启动模型已是 grok-4.7-xhigh，不含 -fast；U0 已用 grok-4.7-high 完成	运行中的子代理拒绝 follow-up；没有丢弃代码，也没有改派到 -fast	Task errors: sub-agent is currently running	recorded
+2026-11-08T10:24:00Z	exec	Grok 配额不足时允许改选适合的非 Fast 模型；小任务优先经济模型，规划与前端优先 Opus 5.5	Benjamin 授权开发模型选择，不含付费实验、购买、扩大范围、部署公开，也不越过 U5	docs/plan.md Appendix C item 1	adopted, no switch yet
+2026-11-08T10:24:30Z	exec	U1 与 U3 仍由 grok-4.7-xhigh 进行，工作区已有未提交文件，未改派也未丢弃	配额尚未拒绝当前任务，授权只在下次启动或配额失败时使用	/tmp/wt-u1/src/templates/simshop/market,/tmp/wt-u3/src/engine	unchanged model
+2026-11-08T10:34:00Z	U3	复核并合并 Agent 注册、LLM 适配器、知识库覆盖层和 MCP 客户端	在工作区重跑 pnpm test，22 项通过；真实模型 lane 仍是 INCONCLUSIVE，未调用供应商	0af227d,/tmp/u3-recheck.txt,/opt/cursor/artifacts/evidence/U3/u3-real.txt	verified, live lane inconclusive
+2026-11-08T10:34:30Z	U3	U3 的模型仍是启动时的 grok-4.7-xhigh，没有因配额授权改派	任务在授权前已经跑完，没有额度拒绝	bc-03b87db5-0883-5f7d-a70b-abd23ff026f1	unchanged model
+2026-11-08T10:34:40Z	exec	U1 仍在 cursor/u1-market-079a 上写未提交文件，未合并也未打断	市场引擎还没到可复核的提交	/tmp/wt-u1	still running
+2026-11-08T10:42:00Z	U1	不合并市场引擎：敏感度门通过，但第 0 回合声誉掉到 0，断供回合不再缺货	penalty 8 乘以缺货件数把声誉打穿，之后需求接近 0，断供没有被检验到	/opt/cursor/artifacts/evidence/U1/u1-supplycut.txt	blocked, fix in progress
+2026-11-08T10:42:30Z	exec	修复交给 grok-4.7-high，不是 Fast，也不是因为配额把整单元改成 Opus	这是有界的参数与声誉修复，工作区仍在 cursor/u1-market-079a	Task follow-up for U1	running
+2026-11-08T11:02:00Z	U1	合并确定性市场。断供第 2 回合 primary-only 缺货 53、声誉 298，好政策改走备选供应商且全程声誉大于 0	在工作区重跑 pnpm test 17 项通过，spring seed 42 两次哈希相同	4f3469f,1cfa2b8,fcec72e5c11fcfd6b2ec12c863dda8829563bf44de3c9c5d0878bebd692f9a39	verified
+2026-11-08T11:02:30Z	exec	U1 修复用的是 grok-4.7-high，合并前没有改派	配额没有拒绝这次修复	bc-153cb06c-a934-56bd-b58a-b37b7aa9e3a1	unchanged model
+2026-11-08T11:04:00Z	exec	U2 事件账本交给 grok-4.7-xhigh，工作区 cursor/u2-ledger-079a	U1 已合并，U2 只依赖 U1；不是 Fast，配额没有拒绝所以没有改成 Opus	bc-6879a6e5-1c74-5ef0-a735-2c5ee7d8e0a5	running
+2026-11-08T11:48:00Z	U2	合并事件账本。重跑 pnpm test 56 项通过。提交键按回合唯一，不同决策哈希返回 RoundAlreadyCommitted 且不追加。settle 在已有记录时不调用 produce	阶段迁移表在内存，账本记录提交、结算和复盘。回放哈希来自该任务的证据文件，我没有重跑计时	002291d,c382e4b,906c1954ca0dd21a8d3ac95b4b3f4ef403d59bed018c3bfcac645342c70dbeda	verified
+2026-11-08T11:48:30Z	exec	U2 模型仍是 grok-4.7-xhigh，没有改派	配额没有拒绝	bc-6879a6e5-1c74-5ef0-a735-2c5ee7d8e0a5	unchanged model
+2026-11-08T11:49:00Z	exec	U4 执行器与调度器交给 grok-4.7-xhigh，分支 cursor/u4-scheduler-079a	U2 与 U3 都已在 main，U4 依赖二者；不是 Fast，配额没有拒绝	bc-2b9f7158-3511-51d5-814e-cff06ea94bc3	running
+2026-11-08T12:33:00Z	U4	合并工作流执行器和调度器。重跑 pnpm test 83 项通过。三条并行提案的开始时间都早于另外两条的结束时间	调度 p95 中位数 0.1021 毫秒是该任务的测量，我没有重跑计时。模型仍是 grok-4.7-xhigh	cc1831e,78e4814,/opt/cursor/artifacts/evidence/U4/u4-trace.txt	verified
+2026-11-08T12:34:00Z	exec	U5 验证与协商交给 grok-4.7-xhigh，分支 cursor/u5-verify-079a，只用 mock	这是第一个审阅门，完成后停下。不是 Fast，没有改成 Opus，也不做付费实验	bc-3c87eaaa-72b6-5eda-af02-d798b038a480	running
+2026-11-08T13:47:00Z	U5	合并验证循环与供应商规则，并停在审阅门。重跑 pnpm test 96 项通过。断供种子 7 两次最终哈希相同，均为 mock	42 秒录像是 x11grab 录下的真实终端，不是合成帧。14 秒原片保留。每回合 14 次调用上限是该任务的计数，我没有重跑。不进入 U6	1a2ef18,/opt/cursor/artifacts/u5-review.mp4,30f6805552f7cbee14b8cf4d934e40b88bbaf02933b9448ef05fd4568a175893	review gate
+2026-11-08T13:47:20Z	exec	U5 模型仍是 grok-4.7-xhigh，没有改派，也没有真实模型调用	配额没有拒绝	bc-3c87eaaa-72b6-5eda-af02-d798b038a480	unchanged model
+2026-11-08T14:37:00Z	U5	用户回复继续，U5 审阅门通过	Benjamin 明确说继续呗。下一道审阅门是 U7 界面，U6 不做产品演示	user message 2026-11-08 14:36	approved
+2026-11-08T14:37:20Z	U6	价格战分配为 0 是沙盘边际为负的实测结果，实验报告照实写，不改数字	广告边际约 -4600、降价边际约 -920，allocateBudget 对非正出价给 0。演示要解释这个决定，而不是把它调成正数	/opt/cursor/artifacts/u5-review-pricewar.txt	kept
+2026-11-08T14:38:00Z	exec	U6 实验台交给 grok-4.7-xhigh，分支 cursor/u6-experiments-079a	常规实现用 Grok，不是 Fast。没有界面，不把终端当产品演示。下一审阅门是 U7	bc-1259171b-68ae-545c-a58f-c439e75c84d4	running

@@ -1,0 +1,31 @@
+$ node <pstack>/skills/poteto-mode/scripts/check-plan.mjs docs/plan.md   (pstack 0.15.36, run 2026-11-08)
+搭骨架并强制平台与模板的边界 (U0)  boxes=15  files=3 build=2 you-see=1 verify-unit=1 verify-live=2 verify-perf=4 review-gate=0 merge=2
+写确定性市场引擎并先检验决策是否有区分度 (U1)  boxes=23  files=5 build=4 you-see=1 verify-unit=4 verify-live=3 verify-perf=4 review-gate=0 merge=2
+建事件日志、回合状态机和幂等结算 (U2)  boxes=24  files=5 build=5 you-see=1 verify-unit=4 verify-live=3 verify-perf=4 review-gate=0 merge=2
+注册 Agent 与工具并接入 LLM、知识库和 MCP (U3)  boxes=26  files=5 build=7 you-see=1 verify-unit=4 verify-live=3 verify-perf=4 review-gate=0 merge=2
+实现工作流执行器和调度器 (U4)  boxes=23  files=3 build=5 you-see=1 verify-unit=4 verify-live=4 verify-perf=4 review-gate=0 merge=2
+组装经营模板的验证、Self-Loop 和协商 (U5)  boxes=33  files=5 build=8 you-see=1 verify-unit=5 verify-live=5 verify-perf=4 review-gate=3 merge=2
+建实验台并做压力测试 (U6)  boxes=25  files=3 build=9 you-see=1 verify-unit=3 verify-live=3 verify-perf=4 review-gate=0 merge=2
+做运行控制台界面 (U7)  boxes=30  files=4 build=4 you-see=1 verify-unit=2 verify-live=10 verify-perf=4 review-gate=3 merge=2
+产出初赛提交材料 (U8)  boxes=21  files=4 build=3 you-see=1 verify-unit=1 verify-live=3 verify-perf=4 review-gate=3 merge=2
+9 PR sections, 19 problems
+docs/plan.md:19: Program checklist lacks "git show origin/main:"
+docs/plan.md:19: Program checklist lacks "/loop 1h"
+docs/plan.md:93: 搭骨架并强制平台与模板的边界 (U0): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:93: 搭骨架并强制平台与模板的边界 (U0): lanes are [1,2], expected 1 to 10
+docs/plan.md:142: 写确定性市场引擎并先检验决策是否有区分度 (U1): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:142: 写确定性市场引擎并先检验决策是否有区分度 (U1): lanes are [1,2,3], expected 1 to 10
+docs/plan.md:193: 建事件日志、回合状态机和幂等结算 (U2): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:193: 建事件日志、回合状态机和幂等结算 (U2): lanes are [1,2,3], expected 1 to 10
+docs/plan.md:246: 注册 Agent 与工具并接入 LLM、知识库和 MCP (U3): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:246: 注册 Agent 与工具并接入 LLM、知识库和 MCP (U3): lanes are [1,2,3], expected 1 to 10
+docs/plan.md:295: 实现工作流执行器和调度器 (U4): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:295: 实现工作流执行器和调度器 (U4): lanes are [1,2,3,4], expected 1 to 10
+docs/plan.md:351: 组装经营模板的验证、Self-Loop 和协商 (U5): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:351: 组装经营模板的验证、Self-Loop 和协商 (U5): lanes are [1,2,3,4,5], expected 1 to 10
+docs/plan.md:409: 建实验台并做压力测试 (U6): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:409: 建实验台并做压力测试 (U6): lanes are [1,2,3], expected 1 to 10
+docs/plan.md:456: 做运行控制台界面 (U7): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:512: 产出初赛提交材料 (U8): Verify, live lacks "Ten lanes on `<swarm workers model>` at the PR head" with the model filled in
+docs/plan.md:512: 产出初赛提交材料 (U8): lanes are [1,2,3], expected 1 to 10
+exit=1

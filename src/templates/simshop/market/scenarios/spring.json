@@ -1,0 +1,37 @@
+{
+  "name": "spring",
+  "rounds": 8,
+  "elasticity": 1.2,
+  "noiseSigma": 0.08,
+  "stockoutPenalty": 4,
+  "holdingCost": 20,
+  "adHalfSat": 30000,
+  "seasonBps": [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000],
+  "skus": {
+    "tea": { "baseDemand": 40, "refPrice": 780 },
+    "snack": { "baseDemand": 30, "refPrice": 390 }
+  },
+  "competitorPrice": {
+    "tea": [780, 780, 780, 780, 780, 780, 780, 780],
+    "snack": [390, 390, 390, 390, 390, 390, 390, 390]
+  },
+  "suppliers": {
+    "primary": {
+      "leadTime": 1,
+      "unitCost": { "tea": 600, "snack": 300 },
+      "capacityByRound": [80, 80, 80, 80, 80, 80, 80, 80]
+    },
+    "backup": {
+      "leadTime": 1,
+      "unitCost": { "tea": 720, "snack": 360 },
+      "capacityByRound": [80, 80, 80, 80, 80, 80, 80, 80]
+    }
+  },
+  "initial": {
+    "cash": 500000,
+    "reputation": 500,
+    "roundIndex": 0,
+    "inventory": { "tea": 56, "snack": 42 },
+    "pendingReceipts": []
+  }
+}

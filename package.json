@@ -1,0 +1,31 @@
+{
+  "name": "agent-ops-lab",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "tsx scripts/not-implemented.ts dev",
+    "sim": "tsx scripts/sim.ts",
+    "exp": "tsx scripts/not-implemented.ts exp",
+    "replay": "tsx scripts/replay.ts"
+  },
+  "dependencies": {
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "@types/node": "^22",
+    "eslint": "^9",
+    "fast-check": "^4",
+    "tsx": "^4",
+    "typescript": "^5",
+    "typescript-eslint": "^8",
+    "vitest": "^3"
+  }
+}

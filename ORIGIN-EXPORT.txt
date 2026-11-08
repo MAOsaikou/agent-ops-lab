@@ -1,0 +1,14 @@
+ORIGIN EXPORT
+=============
+Export time (Asia/Shanghai): 2026-11-08 23:59:04 CST
+Source: maosaikou/tmp-fa9caf936c82a984 (private Origin repo)
+Clone URL: https://origin.cursor.com/maosaikou/tmp-fa9caf936c82a984.git
+Default branch: main
+Tip commit SHA: 3554cafb7fd3accb3208c00fa2cfeb1f5a1e836b
+Tree SHA (main): 69d8f6274c96eb1acb01463191c802828da9951c
+Method: cursor-origin MCP get_git_tree + get_file_contents (no git clone)
+Blob file count: 114
+Exported file count: 114
+Truncated/failed paths: none
+Missing paths: none
+Notes: File contents are exact byte matches vs tree blob sizes. u7-prompt.md was not in the Origin tree.
