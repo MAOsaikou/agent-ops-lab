@@ -8,18 +8,26 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && pnpm --dir web typecheck",
     "test": "vitest run",
-    "dev": "tsx scripts/not-implemented.ts dev",
+    "dev": "tsx src/server/dev.ts",
+    "dev:server": "tsx src/server/host.ts",
+    "dev:web": "pnpm --dir web dev",
+    "e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:record": "node e2e/record.mjs",
     "sim": "tsx scripts/sim.ts",
     "exp": "tsx scripts/not-implemented.ts exp",
-    "replay": "tsx scripts/replay.ts"
+    "replay": "tsx scripts/replay.ts",
+    "u7:fixture": "tsx src/server/fixture.ts"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "hono": "^4.13.17",
     "zod": "^4"
   },
   "devDependencies": {
     "@eslint/js": "^9",
+    "@playwright/test": "^1.65.0",
     "@types/node": "^22",
     "eslint": "^9",
     "fast-check": "^4",

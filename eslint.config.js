@@ -10,12 +10,24 @@ const templateImportGroup = [
 ];
 
 export default tseslint.config(
+  {
+    ignores: [".data/**", "web/dist/**", "coverage/**", "uploads/**"],
+  },
   eslint.configs.recommended,
   tseslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx,mts,cts}"],
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
+    },
+  },
+  {
+    files: ["**/*.mjs"],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly",
+      },
     },
   },
   {

@@ -121,6 +121,7 @@ export type ShopSimulation = {
   readonly callRoles: readonly string[];
   readonly rounds: readonly RoundSummary[];
   readonly events: readonly { readonly type: string; readonly payloadJson: string }[];
+  readonly ledgerEvents: readonly { readonly type: string; readonly payloadJson: string }[];
   readonly priceWars: readonly PriceWarSnap[];
   readonly minInventory: number;
 };
@@ -849,6 +850,10 @@ export async function runShop(input: {
     }
     const folded = foldEvents(ledger.list(runId));
     const events = audit.list(runId).map((event) => ({ type: event.type, payloadJson: event.payloadJson }));
+    const ledgerEvents = ledger.list(runId).map((event) => ({
+      type: event.type,
+      payloadJson: event.payloadJson,
+    }));
     return {
       mode: "mock",
       hash: folded.finalHash,
@@ -857,6 +862,7 @@ export async function runShop(input: {
       callRoles: mock.calls.map((call) => readPrompt(call.prompt).role),
       rounds: summaries,
       events,
+      ledgerEvents,
       priceWars: active.priceWars,
       minInventory: minInventory(active.ledgerRows),
     };
