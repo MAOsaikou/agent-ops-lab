@@ -45,17 +45,17 @@ export function Ledger({
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-lock-400/12 text-lock-400">
                 <Lock className="h-3.5 w-3.5" />
               </span>
-              锁定语义
+              为什么这一行不能改
             </CardTitle>
-            <CardDescription>已提交回合不可回滚，这是设计里的提交边界，不是界面限制</CardDescription>
+            <CardDescription>一个回合要留三份记录：拍板、结账、复盘。三份齐了，这一行就锁住。</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-[12.5px] leading-relaxed text-mist-300">
             <p>
-              每回合按 DecisionCommitted → RoundSettled → RoundReflected 三事件闭合。账本行哈希取自
-              prevHash、回合号、观察哈希、决策哈希、结算 JSON、信念哈希与覆盖层哈希，逐行串成链。
+              每回合先记「今天进了多少货、卖多少钱」，再记「卖出去多少、赚了多少」，最后记「这次学到什么」。
+              三份记录首尾相接，改中间一份就和前后对不上了。
             </p>
             <p className="text-mist-400">
-              界面上没有任何「重做 / 回滚 / 重新结算」入口。下面这个按钮是审阅用取证：它直接调用提交接口，用来证明接口本身也会拒绝。
+              页面上没有「重做、回滚、重新结算」这类按钮。下面那个按钮是给审阅用的：它真的去请求改一个已经结算的回合，用来证明账本会拒绝。
             </p>
           </CardContent>
         </Card>
@@ -65,9 +65,9 @@ export function Ledger({
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-warn-400/12 text-warn-400">
                 <ShieldQuestion className="h-3.5 w-3.5" />
               </span>
-              锁定校验（取证，不是重做入口）
+              试着改一下已经结算的回合
             </CardTitle>
-            <CardDescription>向 POST /api/runs/:runId/rounds/1/commit 提交一次重做请求</CardDescription>
+            <CardDescription>这次请求应该被拒绝。被拒才是对的，说明账本真的锁住了。</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2.5">
             <Button
@@ -79,13 +79,13 @@ export function Ledger({
               }}
               data-testid="probe-lock"
             >
-              {busy ? "调用中…" : "锁定取证：提交第 2 回合（预期 409）"}
+              {busy ? "正在试…" : "改一改已经结算的第 2 回合"}
             </Button>
             <pre
               className="max-h-[168px] overflow-auto rounded-xl bg-ink-950/70 px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-mist-300 ring-1 ring-inset ring-white/[0.05]"
               data-testid="probe-result"
             >
-              {probe ?? "尚未调用。预期返回 409 round-locked，账本不变。"}
+              {probe ?? "还没试。预期会被拒绝，账本不会变。"}
             </pre>
           </CardContent>
         </Card>

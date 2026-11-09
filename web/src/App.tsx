@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, Radio, ServerCog } from "lucide-react";
+import { Store } from "lucide-react";
 
 import { ModeBanner } from "./components/ModeBanner.js";
+import { ShopStats } from "./components/RoundStory.js";
 import { Badge } from "./components/ui/badge.js";
 import { Tabs } from "./components/ui/tabs.js";
 import { createRun, fetchLedger, fetchMode, fetchRun, fetchRuns } from "./lib/api.js";
@@ -15,11 +16,11 @@ import { RunConsole } from "./views/RunConsole.js";
 import { RunSetup } from "./views/RunSetup.js";
 
 const TABS = [
-  { id: "setup", label: "开局" },
-  { id: "console", label: "运行控制台" },
-  { id: "negotiation", label: "协商与预算" },
-  { id: "ledger", label: "账本" },
-  { id: "compare", label: "对比" },
+  { id: "setup", label: "开店" },
+  { id: "console", label: "本回合" },
+  { id: "negotiation", label: "进货谈判" },
+  { id: "ledger", label: "经营账本" },
+  { id: "compare", label: "结果对比" },
 ];
 
 export function App(): React.JSX.Element {
@@ -142,42 +143,37 @@ export function App(): React.JSX.Element {
       <header className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2.5">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-flow-400/12 text-flow-400 ring-1 ring-inset ring-flow-400/25">
-            <Activity className="h-[18px] w-[18px]" />
+            <Store className="h-[18px] w-[18px]" />
           </div>
           <div>
-            <div className="text-[15px] font-semibold tracking-tight text-mist-100">多 Agent 经营挑战 · 运行控制台</div>
-            <div className="text-[11.5px] text-mist-400">U7 · 中文运行控制台 · 事件溯源回放</div>
+            <div className="text-[15px] font-semibold tracking-tight text-mist-100">街角小店 · 今天怎么经营</div>
+            <div className="text-[11.5px] text-mist-400">看进货、定价、营销，和一天结束后的账</div>
           </div>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2.5 text-[11.5px] text-mist-400">
-          <span className="inline-flex items-center gap-1.5">
-            <ServerCog className="h-3.5 w-3.5" />
-            服务 127.0.0.1:47321
+          <span className="text-mist-500" title="界面 127.0.0.1:47322 · 服务 127.0.0.1:47321">
+            本机演示
           </span>
-          <span className="inline-flex items-center gap-1.5">
-            <Radio className="h-3.5 w-3.5" />
-            界面 127.0.0.1:47322
-          </span>
-          <Badge tone={apiOnline ? "lock" : "risk"}>{apiOnline ? "API 在线" : "API 离线"}</Badge>
+          <Badge tone={apiOnline ? "lock" : "risk"}>{apiOnline ? "服务正常" : "服务未连上"}</Badge>
         </div>
       </header>
 
       <ModeBanner mode={mode} />
 
+      <ShopStats state={state} meta={meta} catalog={catalog} />
+
       <div className="flex flex-wrap items-center gap-2">
         <Tabs items={TABS} value={tab} onValueChange={setTab} />
         <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[11.5px] text-mist-400">
           {meta === null ? (
-            <Badge tone="muted">未选择运行</Badge>
+            <Badge tone="muted">还没开店</Badge>
           ) : (
             <>
               <Badge tone="flow">{SCENARIO_TEXT[meta.scenario]}</Badge>
-              <Badge tone="muted">种子 {meta.seed}</Badge>
-              <Badge tone="muted">{meta.rounds} 回合</Badge>
               <Badge tone={meta.profile === "stressed" ? "warn" : "muted"}>
-                {meta.profile === "stressed" ? "压力画像" : "稳健画像"}
+                {meta.profile === "stressed" ? "激进经营" : "稳妥经营"}
               </Badge>
-              <span className="font-mono">{meta.runId}</span>
+              <span>第 {state.lastSeq === 0 ? 1 : (state.rounds.at(-1)?.round ?? 0) + 1} 回合</span>
             </>
           )}
         </div>

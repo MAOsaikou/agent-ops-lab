@@ -15,21 +15,21 @@ export function Negotiation({ state }: { readonly state: UiState }): React.JSX.E
         <div className="flex flex-col gap-3">
           <Card>
             <CardHeader>
-              <CardTitle>协商概览</CardTitle>
-              <CardDescription>协商是带 maxIterations=3 的循环子工作流，破裂时输出「本回合不下单」</CardDescription>
+              <CardTitle>这次谈判的结果</CardTitle>
+              <CardDescription>供应商没货时，店里最多来回谈三轮。谈不拢，这回合就不进货。</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
               <div className="grid grid-cols-2 gap-2">
-                <Outcome label="接受" value={accept} tone="lock" note="按规则价成交" />
-                <Outcome label="破裂" value={walk} tone="risk" note="本回合不下单" />
+                <Outcome label="谈成了" value={accept} tone="lock" note="按谈好的价进货" />
+                <Outcome label="谈崩了" value={walk} tone="risk" note="这回合不下单" />
               </div>
               <div className="grid grid-cols-3 gap-2">
-                <Metric label="还价" value={String(counter)} tone="warn" />
-                <Metric label="报价事件" value={String(state.quotes.length)} />
-                <Metric label="预算仲裁" value={String(state.budgets.length)} />
+                <Metric label="来回讲价" value={String(counter)} tone="warn" />
+                <Metric label="报价次数" value={String(state.quotes.length)} />
+                <Metric label="营销预算" value={String(state.budgets.length)} />
               </div>
               <div className="rounded-xl bg-white/[0.03] px-3 py-2 text-[11.5px] text-mist-400">
-                涉及回合：{rounds.size === 0 ? "—" : [...rounds].map((round) => `第 ${round + 1} 回合`).join("、")}
+                发生在：{rounds.size === 0 ? "这一局还没遇到断供" : [...rounds].map((round) => `第 ${round + 1} 回合`).join("、")}
               </div>
             </CardContent>
           </Card>

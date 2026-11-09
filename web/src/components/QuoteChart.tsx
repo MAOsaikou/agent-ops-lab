@@ -19,8 +19,8 @@ const SERIES: readonly {
   readonly name: string;
   readonly color: string;
 }[] = [
-  { key: "primaryTea", name: "主供 · 茶饮", color: "#60a5fa" },
-  { key: "primarySnack", name: "主供 · 零食", color: "#38bdf8" },
+  { key: "primaryTea", name: "老供应商 · 茶饮", color: "#60a5fa" },
+  { key: "primarySnack", name: "老供应商 · 零食", color: "#38bdf8" },
   { key: "backupTea", name: "备选 · 茶饮", color: "#34d399" },
   { key: "backupSnack", name: "备选 · 零食", color: "#a3e635" },
 ];
@@ -61,15 +61,13 @@ export function QuoteChart({ quotes }: { readonly quotes: readonly QuoteFrame[] 
   return (
     <Card className="h-full">
       <CardHeader>
-        <CardTitle>断供协商报价走势</CardTitle>
-        <CardDescription>
-          单价按元计。每轮报价由 acceptOrCounter 依据隐藏底价、产能与交期裁定，话术不含底价、不改成交价
-        </CardDescription>
+        <CardTitle>断供时怎么谈价</CardTitle>
+        <CardDescription>每条线是一种「供应商 + 商品」的进货单价（元），每个点是一轮谈价后的价格。店里看得到对方开价，看不到对方的底价。</CardDescription>
       </CardHeader>
       <CardContent className="h-[300px]">
         {data.length === 0 ? (
-          <div className="flex h-full items-center justify-center rounded-xl bg-white/[0.02] text-[12.5px] text-mist-400">
-            本局没有供应协商事件（没有断供危机卡时不会进入子工作流）
+          <div className="flex h-full items-center justify-center rounded-xl bg-white/[0.02] px-6 text-center text-[12.5px] text-mist-400">
+            这一局没有断供，也就没有进货谈判。剧本里没有断供危机时，这一步会被跳过。
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -111,38 +109,38 @@ export function QuoteChart({ quotes }: { readonly quotes: readonly QuoteFrame[] 
 }
 
 const RULING: Record<string, { readonly label: string; readonly className: string }> = {
-  accept: { label: "接受", className: "bg-lock-400/12 text-lock-400" },
-  counter: { label: "还价", className: "bg-warn-400/12 text-warn-400" },
-  walk: { label: "破裂", className: "bg-risk-400/12 text-risk-400" },
+  accept: { label: "成交", className: "bg-lock-400/12 text-lock-400" },
+  counter: { label: "再讲讲价", className: "bg-warn-400/12 text-warn-400" },
+  walk: { label: "谈崩了", className: "bg-risk-400/12 text-risk-400" },
 };
 
 export function QuoteTable({ quotes }: { readonly quotes: readonly QuoteFrame[] }): React.JSX.Element {
   return (
     <Card className="h-full">
       <CardHeader>
-        <CardTitle>报价明细</CardTitle>
-        <CardDescription>每行都是一条 SupplierQuote 事件，可直接对照事件流</CardDescription>
+        <CardTitle>每次进货报价</CardTitle>
+        <CardDescription>报价、成交、还价或谈崩，按发生顺序列在这里</CardDescription>
       </CardHeader>
       <CardContent className="max-h-[336px] overflow-y-auto p-0">
         <table className="w-full border-collapse text-[12.5px]">
           <thead className="sticky top-0 z-10 bg-ink-850/95 text-left text-[11px] font-medium text-mist-400 backdrop-blur">
             <tr>
               <th className="px-5 py-2.5 font-medium">回合</th>
-              <th className="px-2 py-2.5 font-medium">供应商</th>
-              <th className="px-2 py-2.5 font-medium">SKU</th>
-              <th className="px-2 py-2.5 font-medium">轮次</th>
-              <th className="px-2 py-2.5 font-medium">裁定</th>
-              <th className="px-2 py-2.5 text-right font-medium">表价</th>
-              <th className="px-2 py-2.5 text-right font-medium">规则价</th>
+              <th className="px-2 py-2.5 font-medium">哪家</th>
+              <th className="px-2 py-2.5 font-medium">商品</th>
+              <th className="px-2 py-2.5 font-medium">第几轮</th>
+              <th className="px-2 py-2.5 font-medium">结果</th>
+              <th className="px-2 py-2.5 text-right font-medium">对方开价</th>
+              <th className="px-2 py-2.5 text-right font-medium">谈下来的价</th>
               <th className="px-2 py-2.5 text-right font-medium">数量</th>
-              <th className="px-5 py-2.5 font-medium">话术</th>
+              <th className="px-5 py-2.5 font-medium">对方怎么说</th>
             </tr>
           </thead>
           <tbody>
             {quotes.length === 0 ? (
               <tr>
                 <td colSpan={9} className="px-5 py-8 text-center text-[12.5px] text-mist-400">
-                  本局没有协商事件
+          本局没有进货谈判记录
                 </td>
               </tr>
             ) : (
