@@ -22,14 +22,14 @@ export function Stat({
             ? "text-flow-400"
             : "text-mist-100";
   return (
-    <div className="rounded-lg border border-ink-700/60 bg-ink-900/60 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wider text-mist-500">{label}</div>
-      <div className={cn("mt-0.5 text-sm font-semibold tabular-nums", toneClass)}>{value}</div>
-      {hint === undefined ? null : <div className="mt-0.5 text-[10px] text-mist-500">{hint}</div>}
+    <div className="rounded-xl border border-white/[0.05] bg-ink-900/45 px-3 py-2.5">
+      <div className="text-[11px] text-mist-400">{label}</div>
+      <div className={cn("mt-1 text-lg font-semibold leading-tight tracking-tight tabular-nums", toneClass)}>{value}</div>
+      {hint === undefined ? null : <div className="mt-0.5 text-[11px] text-mist-400">{hint}</div>}
     </div>
   );
 }
 
 export function Separator({ className }: { readonly className?: string }): React.JSX.Element {
-  return <div className={cn("h-px w-full bg-ink-700/60", className)} />;
+  return <div className={cn("h-px w-full bg-white/[0.06]", className)} />;
 }

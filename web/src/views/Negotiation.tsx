@@ -10,27 +10,56 @@ export function Negotiation({ state }: { readonly state: UiState }): React.JSX.E
   const walk = state.quotes.filter((quote) => quote.ruling === "walk").length;
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)]">
         <QuoteChart quotes={state.quotes} />
         <div className="flex flex-col gap-3">
           <Card>
             <CardHeader>
               <CardTitle>协商概览</CardTitle>
-              <CardDescription>子工作流是带 maxIterations=3 的循环节点，破裂时输出「本回合不下单」</CardDescription>
+              <CardDescription>协商是带 maxIterations=3 的循环子工作流，破裂时输出「本回合不下单」</CardDescription>
             </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-2 text-[11px]">
-              <Metric label="报价事件" value={String(state.quotes.length)} />
-              <Metric label="涉及回合" value={rounds.size === 0 ? "—" : [...rounds].map((round) => round + 1).join("、")} />
-              <Metric label="接受" value={String(accept)} tone="lock" />
-              <Metric label="还价" value={String(counter)} tone="warn" />
-              <Metric label="破裂" value={String(walk)} tone="risk" />
-              <Metric label="预算仲裁" value={String(state.budgets.length)} />
+            <CardContent className="flex flex-col gap-2">
+              <div className="grid grid-cols-2 gap-2">
+                <Outcome label="接受" value={accept} tone="lock" note="按规则价成交" />
+                <Outcome label="破裂" value={walk} tone="risk" note="本回合不下单" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <Metric label="还价" value={String(counter)} tone="warn" />
+                <Metric label="报价事件" value={String(state.quotes.length)} />
+                <Metric label="预算仲裁" value={String(state.budgets.length)} />
+              </div>
+              <div className="rounded-xl bg-white/[0.03] px-3 py-2 text-[11.5px] text-mist-400">
+                涉及回合：{rounds.size === 0 ? "—" : [...rounds].map((round) => `第 ${round + 1} 回合`).join("、")}
+              </div>
             </CardContent>
           </Card>
           <BudgetPanel budgets={state.budgets} />
         </div>
       </div>
       <QuoteTable quotes={state.quotes} />
+    </div>
+  );
+}
+
+function Outcome({
+  label,
+  value,
+  tone,
+  note,
+}: {
+  readonly label: string;
+  readonly value: number;
+  readonly tone: "lock" | "risk";
+  readonly note: string;
+}): React.JSX.Element {
+  const accent = tone === "lock" ? "text-lock-400" : "text-risk-400";
+  const bar = tone === "lock" ? "bg-lock-400" : "bg-risk-400";
+  return (
+    <div className="relative overflow-hidden rounded-xl bg-white/[0.03] px-3 py-2.5">
+      <span className={`absolute left-0 top-0 h-full w-[3px] ${bar}`} />
+      <div className="text-[11.5px] text-mist-400">{label}</div>
+      <div className={`text-3xl font-semibold leading-tight tabular-nums tracking-tight ${accent}`}>{value}</div>
+      <div className="text-[11px] text-mist-500">{note}</div>
     </div>
   );
 }
@@ -47,9 +76,9 @@ function Metric({
   const toneClass =
     tone === "lock" ? "text-lock-400" : tone === "warn" ? "text-warn-400" : tone === "risk" ? "text-risk-400" : "text-mist-100";
   return (
-    <div className="rounded-lg border border-ink-700/60 bg-ink-900/50 px-2.5 py-2">
-      <div className="text-[10px] text-mist-500">{label}</div>
-      <div className={`mt-0.5 text-sm font-semibold tabular-nums ${toneClass}`}>{value}</div>
+    <div className="rounded-xl bg-white/[0.03] px-3 py-2">
+      <div className="text-[11.5px] text-mist-400">{label}</div>
+      <div className={`mt-0.5 text-lg font-semibold leading-tight tabular-nums ${toneClass}`}>{value}</div>
     </div>
   );
 }

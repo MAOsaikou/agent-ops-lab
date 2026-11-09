@@ -36,7 +36,7 @@ export function AgentCards({ state }: { readonly state: UiState }): React.JSX.El
     <Card>
       <CardHeader>
         <CardTitle>Agent 席位</CardTitle>
-        <CardDescription>调度事件里的版本号与评分来自 NodeScheduled 载荷</CardDescription>
+        <CardDescription>版本号与评分来自 NodeScheduled 载荷</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5">
         {ROSTER.map((agent) => {
@@ -45,23 +45,23 @@ export function AgentCards({ state }: { readonly state: UiState }): React.JSX.El
           return (
             <div
               key={agent.id}
-              className="flex items-center justify-between gap-2 rounded-lg border border-ink-700/60 bg-ink-900/50 px-2.5 py-1.5"
+              className="flex items-center justify-between gap-2 rounded-xl bg-white/[0.03] px-3 py-2"
             >
               <div className="min-w-0">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-mist-100">
+                <div className="flex items-center gap-1.5 text-[13px] font-medium text-mist-100">
                   <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-lock-400" : "bg-ink-600"}`} />
                   {agent.name}
                 </div>
-                <div className="truncate text-[10px] text-mist-500">{agent.duty}</div>
+                <div className="truncate text-[11.5px] text-mist-400">{agent.duty}</div>
               </div>
-              <div className="text-right">
+              <div className="shrink-0 text-right">
                 {live?.version === undefined ? (
                   <Badge tone="muted">未激活</Badge>
                 ) : (
                   <Badge tone="flow">v{live.version}</Badge>
                 )}
                 {live?.score === undefined ? null : (
-                  <div className="mt-0.5 text-[10px] tabular-nums text-mist-500">评分 {live.score.toFixed(2)}</div>
+                  <div className="mt-1 text-[11px] tabular-nums text-mist-400">评分 {live.score.toFixed(2)}</div>
                 )}
               </div>
             </div>
@@ -79,20 +79,20 @@ export function VerifyPanel({ state, round }: { readonly state: UiState; readonl
     <Card className="h-full">
       <CardHeader>
         <CardTitle>分层验证与修正循环</CardTitle>
-        <CardDescription>事件来源 LoopIterated（U5 只持久化这一层，未通过检查项 ID 不进事件流）</CardDescription>
+        <CardDescription>U5 只持久化 LoopIterated，未通过检查项的 ID 不进事件流</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5">
         {shown.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-ink-600/70 px-3 py-6 text-center text-xs text-mist-500">
+          <div className="rounded-xl bg-white/[0.02] px-3 py-6 text-center text-[12.5px] text-mist-400">
             还没有验证事件。开始回放后，这里会出现每一轮修正的判定、p50 与停止原因。
           </div>
         ) : (
           shown.map((loop) => (
             <div
               key={`${String(loop.round)}-${String(loop.iteration)}-${loop.decisionHash}`}
-              className="flex items-center justify-between gap-2 rounded-lg border border-ink-700/60 bg-ink-900/50 px-2.5 py-1.5"
+              className="flex items-center justify-between gap-2 rounded-xl bg-white/[0.03] px-3 py-2"
             >
-              <div className="flex items-center gap-2 text-[11px]">
+              <div className="flex items-center gap-2 text-[12.5px]">
                 <Badge tone={loop.verdict === "pass" ? "lock" : loop.verdict === "revise" ? "warn" : "risk"}>
                   {loop.verdict === "pass" ? "通过" : loop.verdict === "revise" ? "退回修正" : "拒绝"}
                 </Badge>
@@ -100,10 +100,10 @@ export function VerifyPanel({ state, round }: { readonly state: UiState; readonl
                   第 {loop.round + 1} 回合 · 迭代 {loop.iteration}
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-[10px] tabular-nums text-mist-500">
+              <div className="flex items-center gap-2.5 text-[11.5px] tabular-nums text-mist-400">
                 <span>p50 {yuanCompact(loop.p50)}</span>
                 <span>调用 {loop.callsUsed}</span>
-                <span className={loop.stopReason === null ? "text-mist-500" : "text-warn-400"}>
+                <span className={loop.stopReason === null ? "text-mist-400" : "text-warn-400"}>
                   {loop.stopReason === null ? "继续" : (STOP_TEXT[loop.stopReason] ?? loop.stopReason)}
                 </span>
               </div>
@@ -131,17 +131,17 @@ export function SandboxPanel({
     <Card>
       <CardHeader>
         <CardTitle>沙盘区间</CardTitle>
-        <CardDescription>沙盘 p50 来自验证管线写入的 LoopIterated</CardDescription>
+        <CardDescription>p50 来自验证管线写入的 LoopIterated</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2 text-xs">
+      <CardContent className="flex flex-col gap-2.5 text-[12.5px]">
         <div className="flex items-baseline justify-between">
-          <span className="text-mist-500">沙盘 p50 利润</span>
-          <span className="text-sm font-semibold tabular-nums text-mist-100">
+          <span className="text-mist-400">沙盘 p50 利润</span>
+          <span className="text-xl font-semibold tabular-nums tracking-tight text-mist-100">
             {last === undefined ? "—" : yuan(last.p50)}
           </span>
         </div>
         <div className="flex items-baseline justify-between">
-          <span className="text-mist-500">缺货风险 / 库存</span>
+          <span className="text-mist-400">缺货风险 / 库存</span>
           <span className="tabular-nums text-mist-300">
             {settled?.outcome === undefined
               ? "—"
@@ -151,12 +151,12 @@ export function SandboxPanel({
           </span>
         </div>
         <div className="flex items-baseline justify-between">
-          <span className="text-mist-500">本局调用量</span>
+          <span className="text-mist-400">本局调用量</span>
           <span className="tabular-nums text-mist-300">
             {meta === null ? "—" : `${String(meta.calls)} 次 · ${meta.callRoles.length} 个角色`}
           </span>
         </div>
-        <div className="rounded-lg border border-dashed border-ink-600/70 px-2.5 py-1.5 text-[10px] leading-relaxed text-mist-500">
+        <div className="rounded-xl bg-white/[0.03] px-3 py-2 text-[11.5px] leading-relaxed text-mist-400">
           p10 / p90 只在验证管线内部参与判定，U5 未把区间写进事件流；界面不猜这两个数字。
         </div>
       </CardContent>
@@ -188,22 +188,29 @@ export function CrisisCard({
     : priceDrop
       ? `竞品茶饮价 ${String(prevTea)} → ${String(tea)} 分，触发价格战仲裁`
       : "公开新闻里没有危机信号，条件节点走维持预算分支";
+  const urgent = supplyCut || priceDrop;
   return (
     <Card>
       <CardHeader>
         <CardTitle>危机卡</CardTitle>
-        <CardDescription>危机日程由场景与种子确定，写入事件日志后可重放</CardDescription>
+        <CardDescription>危机日程由场景与种子确定，可重放</CardDescription>
       </CardHeader>
-      <CardContent className="flex items-start gap-2">
-        <AlertTriangle className={`mt-0.5 h-4 w-4 ${supplyCut || priceDrop ? "text-warn-400" : "text-mist-500"}`} />
-        <div>
-          <div className="text-xs font-semibold text-mist-100">
+      <CardContent className="flex items-start gap-2.5">
+        <span
+          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+            urgent ? "bg-warn-400/12 text-warn-400" : "bg-white/[0.05] text-mist-400"
+          }`}
+        >
+          <AlertTriangle className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold text-mist-100">
             {label}
-            <span className="ml-2 text-[10px] font-normal text-mist-500">
+            <span className="ml-2 text-[11.5px] font-normal text-mist-400">
               第 {index + 1} 回合 · {catalog === undefined ? "未选择场景" : SCENARIO_TEXT[catalog.name]}
             </span>
           </div>
-          <div className="mt-1 text-[11px] leading-relaxed text-mist-500">{detail}</div>
+          <div className="mt-1 text-[12px] leading-relaxed text-mist-400">{detail}</div>
         </div>
       </CardContent>
     </Card>
@@ -216,15 +223,15 @@ export function GateBar({ state, round }: { readonly state: UiState; readonly ro
     <Card>
       <CardHeader>
         <CardTitle>店长审批</CardTitle>
-        <CardDescription>U5 回合工作流未声明 humanGate 节点，运行时审批固定为自动批准</CardDescription>
+        <CardDescription>U5 回合工作流没有 humanGate 节点，运行时审批固定为自动批准</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 text-[11px]">
+      <CardContent className="flex flex-col gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
           <Badge tone={settled?.committed === true ? "lock" : "muted"}>
             {settled?.committed === true ? "已自动批准并锁定" : "等待提交"}
           </Badge>
           {settled?.source === undefined ? null : (
-            <span className="text-mist-500">
+            <span className="text-mist-400">
               决策来源：{settled.source === "fallback" ? "安全兜底" : "验证通过"}
             </span>
           )}
@@ -243,8 +250,8 @@ export function GateBar({ state, round }: { readonly state: UiState; readonly ro
             否决
           </Button>
         </div>
-        <div className="text-[10px] leading-relaxed text-mist-500">
-          审批按钮置灰是如实反映能力边界：要让退回把回合打回修正并让循环计数加一，需要 U6 之后给回合工作流加人工节点，本单元不动市场与工作流语义。
+        <div className="text-[11.5px] leading-relaxed text-mist-400">
+          审批按钮置灰是如实反映能力边界：要让退回把回合打回修正并让循环计数加一，需要 U6 之后给回合工作流加人工节点。
         </div>
       </CardContent>
     </Card>
@@ -264,19 +271,19 @@ export function EventLog({ state }: { readonly state: UiState }): React.JSX.Elem
     <Card className="h-full">
       <CardHeader>
         <CardTitle>事件流</CardTitle>
-        <CardDescription>按 seq 顺序折叠，重复事件忽略、乱序事件缓冲后补齐</CardDescription>
+        <CardDescription>按 seq 折叠，重复事件忽略、乱序事件缓冲后补齐</CardDescription>
       </CardHeader>
-      <CardContent className="max-h-[232px] overflow-y-auto">
+      <CardContent className="max-h-[236px] overflow-y-auto">
         {rows.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-ink-600/70 px-3 py-6 text-center text-xs text-mist-500">
+          <div className="rounded-xl bg-white/[0.02] px-3 py-6 text-center text-[12.5px] text-mist-400">
             还没有事件。开始回放后事件会按 seq 追加在这里。
           </div>
         ) : (
           <ul className="flex flex-col gap-1">
             {rows.map((entry) => (
-              <li key={`${String(entry.seq)}-${entry.text}`} className="flex items-start gap-2 text-[11px]">
-                <span className="w-9 shrink-0 text-right font-mono text-[10px] text-mist-500">{entry.seq}</span>
-                <CircleDot className={`mt-0.5 h-3 w-3 shrink-0 ${tone[entry.tone] ?? "text-mist-500"}`} />
+              <li key={`${String(entry.seq)}-${entry.text}`} className="flex items-start gap-2 text-[12px] leading-relaxed">
+                <span className="w-8 shrink-0 text-right font-mono text-[11px] text-mist-500">{entry.seq}</span>
+                <CircleDot className={`mt-1 h-3 w-3 shrink-0 ${tone[entry.tone] ?? "text-mist-500"}`} />
                 <span className="text-mist-300">{entry.text}</span>
               </li>
             ))}
@@ -300,29 +307,29 @@ export function LedgerSummary({ state, expected }: { readonly state: UiState; re
         </CardTitle>
         <CardDescription>已结算回合立即上锁，界面与接口都不提供重做</CardDescription>
       </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-2 text-xs">
-        <div className="rounded-lg border border-ink-700/60 bg-ink-900/50 px-2.5 py-1.5">
-          <div className="text-[10px] text-mist-500">已锁定回合</div>
-          <div className="tabular-nums text-lock-400" data-testid="locked-count">
+      <CardContent className="grid grid-cols-2 gap-2">
+        <div className="col-span-2 rounded-xl bg-white/[0.03] px-3 py-2.5">
+          <div className="text-[11.5px] text-mist-400">已锁定回合</div>
+          <div className="text-2xl font-semibold tabular-nums tracking-tight text-lock-400" data-testid="locked-count">
             {locked}/{expected}
           </div>
+          <div className="text-[11px] text-mist-500">已锁定比例 {expected === 0 ? "0%" : percent(locked / expected)}</div>
         </div>
-        <div className="rounded-lg border border-ink-700/60 bg-ink-900/50 px-2.5 py-1.5">
-          <div className="text-[10px] text-mist-500">累计利润</div>
-          <div className={`tabular-nums ${profit >= 0 ? "text-lock-400" : "text-risk-400"}`}>
+        <div className="rounded-xl bg-white/[0.03] px-3 py-2.5">
+          <div className="text-[11.5px] text-mist-400">累计利润</div>
+          <div className={`text-lg font-semibold tabular-nums tracking-tight ${profit >= 0 ? "text-lock-400" : "text-risk-400"}`}>
             {state.rounds.length === 0 ? "—" : yuan(profit)}
           </div>
         </div>
-        <div className="col-span-2 rounded-lg border border-ink-700/60 bg-ink-900/50 px-2.5 py-1.5">
-          <div className="text-[10px] text-mist-500">现金</div>
-          <div className="tabular-nums text-mist-100">{cash === undefined ? "—" : yuan(cash)}</div>
+        <div className="rounded-xl bg-white/[0.03] px-3 py-2.5">
+          <div className="text-[11.5px] text-mist-400">现金</div>
+          <div className="text-lg font-semibold tabular-nums tracking-tight text-mist-100">
+            {cash === undefined ? "—" : yuan(cash)}
+          </div>
         </div>
-        <div className="col-span-2 flex items-center gap-1.5 text-[10px] text-mist-500">
+        <div className="col-span-2 flex items-center gap-1.5 text-[11.5px] text-mist-400">
           <Store className="h-3 w-3" />
           重做入口：无（界面没有按钮，接口返回 409）
-        </div>
-        <div className="col-span-2 text-[10px] text-mist-500">
-          已锁定比例 {expected === 0 ? "0%" : percent(locked / expected)}
         </div>
       </CardContent>
     </Card>

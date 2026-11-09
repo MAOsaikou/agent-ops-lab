@@ -140,22 +140,22 @@ export function App(): React.JSX.Element {
   return (
     <div className="mx-auto flex min-h-full w-full max-w-[1600px] flex-col gap-3 px-4 py-3">
       <header className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-flow-400/15 text-flow-400 ring-1 ring-flow-400/40">
-            <Activity className="h-4 w-4" />
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-flow-400/12 text-flow-400 ring-1 ring-inset ring-flow-400/25">
+            <Activity className="h-[18px] w-[18px]" />
           </div>
           <div>
-            <div className="text-sm font-semibold tracking-tight text-mist-100">多 Agent 经营挑战 · 运行控制台</div>
-            <div className="text-[10px] text-mist-500">U7 · 中文运行控制台 · 事件溯源回放</div>
+            <div className="text-[15px] font-semibold tracking-tight text-mist-100">多 Agent 经营挑战 · 运行控制台</div>
+            <div className="text-[11.5px] text-mist-400">U7 · 中文运行控制台 · 事件溯源回放</div>
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-2 text-[10px] text-mist-500">
-          <span className="inline-flex items-center gap-1">
-            <ServerCog className="h-3 w-3" />
+        <div className="ml-auto flex flex-wrap items-center gap-2.5 text-[11.5px] text-mist-400">
+          <span className="inline-flex items-center gap-1.5">
+            <ServerCog className="h-3.5 w-3.5" />
             服务 127.0.0.1:47321
           </span>
-          <span className="inline-flex items-center gap-1">
-            <Radio className="h-3 w-3" />
+          <span className="inline-flex items-center gap-1.5">
+            <Radio className="h-3.5 w-3.5" />
             界面 127.0.0.1:47322
           </span>
           <Badge tone={apiOnline ? "lock" : "risk"}>{apiOnline ? "API 在线" : "API 离线"}</Badge>
@@ -166,7 +166,7 @@ export function App(): React.JSX.Element {
 
       <div className="flex flex-wrap items-center gap-2">
         <Tabs items={TABS} value={tab} onValueChange={setTab} />
-        <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[10px] text-mist-500">
+        <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[11.5px] text-mist-400">
           {meta === null ? (
             <Badge tone="muted">未选择运行</Badge>
           ) : (

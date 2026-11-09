@@ -8,7 +8,8 @@
   --color-ink-700: #1b2740;
   --color-ink-600: #2a3a5c;
   --color-mist-100: #e8eefc;
-  --color-mist-300: #a9b8d4;
+  --color-mist-300: #b4c2dc;
+  --color-mist-400: #93a3c0;
   --color-mist-500: #74849f;
   --color-lock-400: #34d399;
   --color-warn-400: #fbbf24;
@@ -16,6 +17,8 @@
   --color-flow-400: #60a5fa;
   --font-sans: "Inter", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
+  --shadow-panel: 0 1px 1px rgba(0, 0, 0, 0.3), 0 16px 32px -24px rgba(0, 0, 0, 0.85);
+  --shadow-raised: 0 1px 1px rgba(0, 0, 0, 0.35), 0 24px 48px -28px rgba(0, 0, 0, 0.9);
 }
 
 * {
