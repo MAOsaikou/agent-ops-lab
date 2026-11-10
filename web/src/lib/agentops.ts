@@ -62,6 +62,7 @@ export function runAgentTask(
 export async function streamAgentTask(
   input: { readonly task: string; readonly autoApprove: boolean },
   onEvent?: (event: RunEvent) => void,
+  onSnapshot?: (snapshot: AgentRun) => void,
 ): Promise<AgentRun> {
   const response = await fetch(`${BASE}/api/agentops/runs/stream`, {
     method: "POST",
@@ -105,6 +106,8 @@ export async function streamAgentTask(
     const parsed: unknown = JSON.parse(rawData);
     if (eventName === "event") {
       onEvent?.(parsed as RunEvent);
+    } else if (eventName === "snapshot") {
+      onSnapshot?.(parsed as AgentRun);
     } else if (eventName === "done") {
       doneRun = parsed as AgentRun;
     } else if (eventName === "error") {

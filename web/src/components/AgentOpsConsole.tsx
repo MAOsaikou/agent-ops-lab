@@ -107,25 +107,25 @@ const SCENARIO_PRESETS: readonly ScenarioPreset[] = [
   {
     id: "pdd-evidence-boundary",
     label: "拼多多短袖",
-    badge: "不改价和预算 · 缺货与证据待拍板",
+    badge: "缺货与证据待拍板",
     text: "分析这个拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。分享文案：纯棉短袖女夏季宽松，券后 ¥39.90，已拼 10 万+，包邮、七天无理由。采购 16 元，包材 1.5 元，快递 6.5 元，目标毛利 25%，可周转资金 300 元。",
   },
   {
     id: "jd-pillow-2loops",
     label: "京东护颈枕",
-    badge: "连改 2 轮预算 · 备货仍待拍板",
+    badge: "改 2 轮预算，备货待拍板",
     text: "评估护颈枕价格与现金流。京东价 ¥89，竞品日单量约 50，采购 18 元，包装 2 元，快递 7 元，平台费率按默认，目标毛利 30%，预算 500 元。",
   },
   {
     id: "pdd-ad-converge",
     label: "拼多多短袖 · 推广偏高",
-    badge: "降 1 轮推广预算 · 细节待确认",
+    badge: "降预算 1 轮，细节待确认",
     text: "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：纯棉短袖，券后价 ¥39.90。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品主流价 39.90 元，日单量 15，目标毛利 25%，推广预算 220 元，可周转资金 5000 元。",
   },
   {
     id: "pdd-promo-floor",
     label: "加厚收纳箱",
-    badge: "活动价低于保本，会改折扣",
+    badge: "提折扣保本，细节待确认",
     text: "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：加厚收纳箱，售价 ¥38.90。采购价 25 元，包材 2 元，快递 6 元，竞品主流价 38.90 元，日单量 60，目标毛利 5%，推广预算 10 元，可周转资金 5000 元。",
   },
 ];
@@ -286,6 +286,11 @@ function CredentialLine({
           </span>
         )}
       </div>
+      {lastEvent === undefined ? null : (
+        <div className="mt-1 break-all font-mono text-[9.5px] text-ink-400">
+          hash: <span className="select-all text-ink-600">{lastEvent.hash}</span>
+        </div>
+      )}
     </details>
   );
 }
@@ -640,12 +645,16 @@ export function AgentOpsConsole(): React.JSX.Element {
         (incomingEvent) => {
           setStreamEvents((prev) => [...prev, incomingEvent]);
         },
+        (snapshot) => {
+          setRun(snapshot);
+        },
       );
       setRun(completedOrPaused);
       setStreamEvents(completedOrPaused.events);
       const latestRuns = await fetchAgentRuns().catch(() => []);
       setRuns(latestRuns);
     } catch (caught) {
+      setRun(null);
       setError(caught instanceof Error ? caught.message : "上架评审运行失败");
     } finally {
       setBusy(false);
@@ -667,7 +676,7 @@ export function AgentOpsConsole(): React.JSX.Element {
   };
 
   const handleDecision = async (action: "approve" | "reject"): Promise<void> => {
-    if (run === null || run.status !== "awaiting-approval") return;
+    if (busy || run === null || run.status !== "awaiting-approval") return;
     setDecisionBusy(true);
     setError(null);
     try {
@@ -691,7 +700,7 @@ export function AgentOpsConsole(): React.JSX.Element {
   };
 
   const startSealedReplay = (): void => {
-    if (run === null || run.events.length === 0) return;
+    if (busy || run === null || run.status === "running" || run.events.length === 0) return;
     setOpenedFromHistory(true);
     setReplayCount(1);
     setReplayAnimating(true);
@@ -707,8 +716,11 @@ export function AgentOpsConsole(): React.JSX.Element {
     if (replayCount !== null) {
       return run.events.slice(0, replayCount);
     }
+    if (busy && streamEvents.length >= run.events.length) {
+      return streamEvents;
+    }
     return run.events;
-  }, [run, streamEvents, replayCount]);
+  }, [busy, run, streamEvents, replayCount]);
 
   const candidates: readonly Candidate[] = run?.artifacts.candidates ?? [];
   const activeCandidateId: CandidateId | null = useMemo(() => {
@@ -833,16 +845,16 @@ export function AgentOpsConsole(): React.JSX.Element {
                   data-testid={`scenario-${String(index + 1)}`}
                   onClick={() => setTask(preset.text)}
                   className={cn(
-                    "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] ring-1 ring-inset transition-colors",
+                    "inline-flex flex-wrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] ring-1 ring-inset transition-colors",
                     task === preset.text
                       ? "bg-ink-900 text-paper-50 ring-ink-900"
                       : "bg-paper-100 text-ink-700 ring-paper-300 hover:bg-paper-150",
                   )}
                 >
-                  <span className="font-medium">{preset.label}</span>
+                  <span className="font-medium whitespace-nowrap">{preset.label}</span>
                   <span
                     className={cn(
-                      "rounded px-1.5 py-0.5 text-[10px]",
+                      "rounded px-1.5 py-0.5 text-[10px] leading-tight",
                       task === preset.text ? "bg-paper-50/15 text-paper-100" : "bg-paper-200 text-ink-600",
                     )}
                   >
@@ -894,10 +906,13 @@ export function AgentOpsConsole(): React.JSX.Element {
               }
               right={
                 <div className="flex flex-wrap items-center gap-2">
-                  {run !== null && openedFromHistory ? (
+                  {currentStatus === "running" ? (
+                    <Pill tone="ochre">实时会签中 · 尚未封存</Pill>
+                  ) : null}
+                  {!busy && run !== null && openedFromHistory ? (
                     <Pill tone="ink">已封存历史卷宗</Pill>
                   ) : null}
-                  {run !== null ? (
+                  {!busy && run !== null && run.status !== "running" ? (
                     replayCount === null ? (
                       <button
                         type="button"
@@ -1232,7 +1247,11 @@ export function AgentOpsConsole(): React.JSX.Element {
                       )}
                     </div>
                     <div className="mt-2 text-[12px] leading-relaxed text-ink-700">
-                      {run.status === "awaiting-approval" ? (
+                      {currentStatus === "running" ? (
+                        <p className="text-ochre-500">
+                          前五步核算与风控已就绪，正在完成文案节点；进入「待掌柜拍板」后方可拍板。
+                        </p>
+                      ) : run.status === "awaiting-approval" ? (
                         <p>核算好了，到你拍板。下面选一套策略，通过或驳回就行。</p>
                       ) : run.status === "rejected" ? (
                         <p className="text-seal-600">掌柜已驳回这次方案，不会生成上架报告。</p>
@@ -1272,6 +1291,8 @@ export function AgentOpsConsole(): React.JSX.Element {
                     </span>
                     {run === null ? (
                       <Pill tone="plain">请先运行评审</Pill>
+                    ) : currentStatus === "running" ? (
+                      <Pill tone="ochre">会签进行中 · 暂不可拍板</Pill>
                     ) : run.status === "awaiting-approval" ? (
                       <Pill tone="seal">等待掌柜拍板</Pill>
                     ) : run.status === "completed" ? (
@@ -1287,11 +1308,13 @@ export function AgentOpsConsole(): React.JSX.Element {
                   <p className="mt-1 text-[12px] leading-relaxed text-ink-600">
                     {run === null
                       ? "评审结束后，在这里选稳价、跟价或冲量，然后通过或驳回。"
-                      : run.status === "awaiting-approval"
-                        ? `现在选的是「${strategyName(activeCandidateId)}」${activeCandidate ? `（售价 ${money(activeCandidate.priceCents)}，毛利 ${pct(activeCandidate.evaluation.daily.margin)}）` : ""}。通过后会按这个方案记下。`
-                        : run.status === "rejected"
-                          ? "这次方案已被驳回，不能再改决定。"
-                          : `已按「${strategyName(run.artifacts.chosenId)}」记下。`}
+                      : currentStatus === "running"
+                        ? "三套报价与风控已出，可先检视下方方案；文案节点完成后解锁拍板。"
+                        : run.status === "awaiting-approval"
+                          ? `现在选的是「${strategyName(activeCandidateId)}」${activeCandidate ? `（售价 ${money(activeCandidate.priceCents)}，毛利 ${pct(activeCandidate.evaluation.daily.margin)}）` : ""}。通过后会按这个方案记下。`
+                          : run.status === "rejected"
+                            ? "这次方案已被驳回，不能再改决定。"
+                            : `已按「${strategyName(run.artifacts.chosenId)}」记下。`}
                   </p>
                 </div>
 
@@ -1299,7 +1322,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                   <ActionButton
                     data-testid="approve"
                     variant="jade"
-                    disabled={run?.status !== "awaiting-approval" || decisionBusy}
+                    disabled={busy || run?.status !== "awaiting-approval" || decisionBusy}
                     onClick={() => {
                       void handleDecision("approve");
                     }}
@@ -1314,7 +1337,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                     data-testid="reject"
                     variant="ghost"
                     className="border border-seal-500/40 text-seal-600 hover:bg-seal-100/50"
-                    disabled={run?.status !== "awaiting-approval" || decisionBusy}
+                    disabled={busy || run?.status !== "awaiting-approval" || decisionBusy}
                     onClick={() => {
                       void handleDecision("reject");
                     }}
@@ -1411,6 +1434,10 @@ export function AgentOpsConsole(): React.JSX.Element {
                           <div className="font-semibold">掌柜已驳回</div>
                           <p className="mt-1">这件不上架，也不会生成通过报告。</p>
                         </div>
+                      ) : currentStatus === "running" ? (
+                        <p className="text-[12.5px] leading-relaxed text-ink-500">
+                          会签还在进行中，等你拍板通过后才会生成并封存报告。
+                        </p>
                       ) : run.artifacts.report.length > 0 ? (
                         <ul className="space-y-1.5 text-[12px] leading-relaxed text-ink-700">
                           {run.artifacts.report.map((line) => (
@@ -1426,7 +1453,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                       )}
                     </div>
 
-                    {run.status === "completed" || run.status === "rejected" ? (
+                    {!busy && (run.status === "completed" || run.status === "rejected") ? (
                       <SealStamp
                         hash={run.fingerprint}
                         at={run.createdAt}
@@ -1601,6 +1628,19 @@ export function AgentOpsConsole(): React.JSX.Element {
                               {shortHash(event.prevHash, 8)} → {shortHash(event.hash, 8)}
                             </span>
                           </div>
+                          <div
+                            data-testid={`event-hash-full-${String(event.seq)}`}
+                            className="mt-1 rounded bg-paper-50/90 px-2 py-1 font-mono text-[9.5px] leading-snug text-ink-500 ring-1 ring-inset ring-paper-200/80"
+                          >
+                            <div className="break-all">
+                              <span className="text-ink-400">prev: </span>
+                              <span className="select-all">{event.prevHash}</span>
+                            </div>
+                            <div className="break-all">
+                              <span className="text-ink-400">hash: </span>
+                              <span className="select-all text-ink-700">{event.hash}</span>
+                            </div>
+                          </div>
                         </details>
                       </li>
                     );
@@ -1669,11 +1709,12 @@ export function AgentOpsConsole(): React.JSX.Element {
           {run === null ? null : (
             <details data-testid="run-proof" className="text-right">
               <summary className="cursor-pointer select-none text-ink-500 hover:text-ink-800">
-                卷宗 {run.id} · 指纹 {shortHash(run.fingerprint, 12)} · 查看凭证
+                卷宗 {run.id} · {currentStatus === "running" ? "实时指纹（未封存）" : "指纹"}{" "}
+                {shortHash(run.fingerprint, 12)} · 查看凭证
               </summary>
               <div className="mt-1 rounded-lg border border-paper-300 bg-paper-50 px-2.5 py-1.5 text-left font-mono text-[10px] text-ink-600">
                 <div>
-                  完整运行指纹：
+                  {currentStatus === "running" ? "当前阶段指纹（未封存）：" : "完整运行指纹："}
                   <span data-testid="run-fingerprint-full" className="select-all break-all text-ink-900">
                     {run.fingerprint}
                   </span>

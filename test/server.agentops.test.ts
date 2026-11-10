@@ -5,10 +5,11 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { openAgentRunStore } from "../src/server/agent-runs.js";
-import { openLlmSettingsStore } from "../src/server/llm-settings.js";
+import { openLlmSettingsStore, type LlmSettingsStore } from "../src/server/llm-settings.js";
 import { openPlanStore } from "../src/server/plans.js";
 import { createPricingApp } from "../src/server/pricing-app.js";
 import type { AgentRun, RunEvent } from "../src/templates/agentops/types.js";
+import { streamAgentTask } from "../web/src/lib/agentops.js";
 
 const TASK =
   "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。纯棉短袖，券后价 ¥39.90，已拼 10 万+ 件。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品主流价 39.90 元，日单量 50，目标毛利 25%，推广预算 30 元，可周转资金 300 元。";
@@ -33,9 +34,11 @@ function setup(runsDir?: string): {
 
 function parseSseStream(raw: string): {
   readonly events: readonly RunEvent[];
+  readonly snapshots: readonly AgentRun[];
   readonly doneRun: AgentRun | null;
 } {
   const events: RunEvent[] = [];
+  const snapshots: AgentRun[] = [];
   let doneRun: AgentRun | null = null;
   const blocks = raw.split("\n\n").map((block) => block.trim()).filter((block) => block.length > 0);
   for (const block of blocks) {
@@ -52,11 +55,13 @@ function parseSseStream(raw: string): {
     const parsed: unknown = JSON.parse(dataLine);
     if (eventName === "done") {
       doneRun = parsed as AgentRun;
+    } else if (eventName === "snapshot") {
+      snapshots.push(parsed as AgentRun);
     } else if (eventName === "event") {
       events.push(parsed as RunEvent);
     }
   }
-  return { events, doneRun };
+  return { events, snapshots, doneRun };
 }
 
 function assertContinuousHashChain(events: readonly RunEvent[]): void {
@@ -362,9 +367,13 @@ describe("AgentOps stream and human decision gate API", () => {
     expect(streamRes.status).toBe(200);
     expect(streamRes.headers.get("content-type")).toContain("text/event-stream");
     const rawStream = await streamRes.text();
-    const { events, doneRun } = parseSseStream(rawStream);
+    const { events, snapshots, doneRun } = parseSseStream(rawStream);
 
     assertContinuousHashChain(events);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.status).toBe("running");
+    expect(snapshots[0]?.artifacts.prices).toHaveLength(3);
+    expect(snapshots[0]?.artifacts.report).toEqual([]);
     expect(doneRun).not.toBeNull();
     expect(doneRun!.status).toBe("completed");
     expect(events).toEqual(doneRun!.events);
@@ -385,6 +394,7 @@ describe("AgentOps stream and human decision gate API", () => {
     expect(pausedStreamRes.status).toBe(200);
     const pausedParsed = parseSseStream(await pausedStreamRes.text());
     assertContinuousHashChain(pausedParsed.events);
+    expect(pausedParsed.snapshots).toHaveLength(1);
     expect(pausedParsed.doneRun).not.toBeNull();
     expect(pausedParsed.doneRun!.status).toBe("awaiting-approval");
     expect(pausedParsed.events.at(-1)?.type).toBe("gate.awaiting");
@@ -392,5 +402,195 @@ describe("AgentOps stream and human decision gate API", () => {
     const loadedPausedRes = await app.request("/api/agentops/runs/stream-paused-1");
     expect(loadedPausedRes.status).toBe(200);
     expect(((await loadedPausedRes.json()) as AgentRun).fingerprint).toBe(pausedParsed.doneRun!.fingerprint);
+  });
+
+  test("controlled delayed mock LLM flushes pre-copy snapshot while copy is still in flight and keeps gate locked until awaiting-approval", async () => {
+    const baseDir = mkdtempSync(path.join(tmpdir(), "agentops-mock-slow-"));
+    let notifyCopyEntered!: () => void;
+    const copyEntered = new Promise<void>((resolve) => {
+      notifyCopyEntered = resolve;
+    });
+    let releaseCopy!: () => void;
+    const copyGate = new Promise<void>((resolve) => {
+      releaseCopy = resolve;
+    });
+
+    const mockSlowLlmStore: LlmSettingsStore = {
+      view: () => ({
+        enabled: true,
+        baseUrl: "http://mock.local",
+        model: "mock-slow-llm",
+        hasKey: true,
+        keyHint: "••••mock",
+        source: "saved",
+        active: true,
+        note: "测试用受控慢速 Mock LLM",
+      }),
+      save: () => {
+        throw new Error("not used in test");
+      },
+      test: async () => ({ ok: true, detail: "mock" }),
+      resolve: () => ({
+        model: "mock-slow-llm",
+        baseUrl: "http://mock.local",
+        client: {
+          complete: async () => {
+            notifyCopyEntered();
+            await copyGate;
+            return {
+              text: JSON.stringify({
+                titles: ["纯棉短袖女夏季宽松透气百搭T恤", "日常通勤纯棉短袖女装上衣"],
+                bullets: ["纯棉面料亲肤透气", "宽松剪裁日常好搭"],
+              }),
+              usage: { promptTokens: 32, completionTokens: 24 },
+            };
+          },
+        },
+      }),
+    };
+
+    const app = createPricingApp({
+      store: openPlanStore(path.join(baseDir, "plans")),
+      agentRuns: openAgentRunStore(path.join(baseDir, "runs")),
+      llmSettings: mockSlowLlmStore,
+      now: () => new Date("2026-11-10T00:00:00.000Z"),
+    });
+
+    const streamRes = await app.request("/api/agentops/runs/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify({
+        id: "mock-slow-run-1",
+        createdAt: "2026-11-10T00:00:00.000Z",
+        task: AD_CONFLICT_TASK,
+        autoApprove: false,
+      }),
+    });
+    expect(streamRes.status).toBe(200);
+    const reader = streamRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let rawPreCopy = "";
+
+    await copyEntered;
+    while (!rawPreCopy.includes("event: snapshot")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      rawPreCopy += decoder.decode(value, { stream: true });
+    }
+
+    const midParsed = parseSseStream(rawPreCopy);
+    expect(midParsed.doneRun).toBeNull();
+    expect(midParsed.snapshots).toHaveLength(1);
+    const midSnapshot = midParsed.snapshots[0]!;
+    expect(midSnapshot.status).toBe("running");
+    expect(midSnapshot.scheduler.facts).not.toBeNull();
+    expect(midSnapshot.artifacts.unit?.totalCents).toBeGreaterThan(0);
+    expect(midSnapshot.artifacts.breakEvenCents).toBeGreaterThan(0);
+    expect(midSnapshot.artifacts.candidates).toHaveLength(3);
+    expect(midSnapshot.artifacts.prices).toHaveLength(3);
+    expect(midSnapshot.artifacts.risk?.rows.length).toBeGreaterThanOrEqual(8);
+    expect(midSnapshot.loops).toHaveLength(1);
+    expect(midSnapshot.artifacts.report).toEqual([]);
+    expect(midSnapshot.gateDecision).toBeNull();
+    // Before LLM completion resolves, snapshot must not claim model output is already adopted
+    expect(midSnapshot.llm.mode).toBe("rule");
+    expect(JSON.stringify(midSnapshot)).not.toContain("apiKey");
+
+    // Gate decision must not be actionable while copy is still in flight
+    const prematureDecision = await app.request("/api/agentops/runs/mock-slow-run-1/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve", candidateId: "profit" }),
+    });
+    expect(prematureDecision.status).toBe(404);
+
+    releaseCopy();
+    let rawRest = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        rawRest += decoder.decode();
+        break;
+      }
+      rawRest += decoder.decode(value, { stream: true });
+    }
+
+    const fullParsed = parseSseStream(rawPreCopy + rawRest);
+    assertContinuousHashChain(fullParsed.events);
+    expect(fullParsed.snapshots).toHaveLength(1);
+    expect(fullParsed.doneRun).not.toBeNull();
+    expect(fullParsed.doneRun!.status).toBe("awaiting-approval");
+    expect(fullParsed.doneRun!.llm.mode).toBe("live");
+    expect(fullParsed.doneRun!.llm.model).toBe("mock-slow-llm");
+    expect(fullParsed.doneRun!.artifacts.copy?.titles[0]?.text).toBe("纯棉短袖女夏季宽松透气百搭T恤");
+    expect(fullParsed.events.some((event) => event.type === "llm.completed")).toBe(true);
+    expect(fullParsed.events.at(-1)?.type).toBe("gate.awaiting");
+
+    // Now that the run is genuinely awaiting-approval, decision succeeds
+    const validDecision = await app.request("/api/agentops/runs/mock-slow-run-1/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "approve", candidateId: "profit" }),
+    });
+    expect(validDecision.status).toBe(200);
+    expect(((await validDecision.json()) as AgentRun).status).toBe("completed");
+  });
+
+  test("streamAgentTask forwards mid-run snapshot and rejects cleanly on mid-wait stream error or truncation without false completion", async () => {
+    const { app } = setup();
+    const fullStreamRes = await app.request("/api/agentops/runs/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify({ id: "source-for-abort", task: TASK, autoApprove: false }),
+    });
+    const fullText = await fullStreamRes.text();
+    const snapshotIdx = fullText.indexOf("event: snapshot");
+    expect(snapshotIdx).toBeGreaterThan(0);
+    const snapshotBlockEnd = fullText.indexOf("\n\n", snapshotIdx);
+    const upToSnapshot = fullText.slice(0, snapshotBlockEnd + 2);
+
+    const originalFetch = globalThis.fetch;
+    try {
+      // 1) Truncated stream after snapshot (network drop before done)
+      const seenSnapshots1: AgentRun[] = [];
+      globalThis.fetch = () =>
+        Promise.resolve(
+          new Response(upToSnapshot, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      await expect(
+        streamAgentTask(
+          { task: TASK, autoApprove: false },
+          undefined,
+          (snap) => seenSnapshots1.push(snap),
+        ),
+      ).rejects.toThrow("未收到完整运行结果");
+      expect(seenSnapshots1).toHaveLength(1);
+      expect(seenSnapshots1[0]?.status).toBe("running");
+
+      // 2) Explicit SSE error frame after snapshot
+      const seenSnapshots2: AgentRun[] = [];
+      const errorFrame = `${upToSnapshot}event: error\ndata: ${JSON.stringify({ code: "run-failed", detail: "模拟网络中断" })}\n\n`;
+      globalThis.fetch = () =>
+        Promise.resolve(
+          new Response(errorFrame, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      await expect(
+        streamAgentTask(
+          { task: TASK, autoApprove: false },
+          undefined,
+          (snap) => seenSnapshots2.push(snap),
+        ),
+      ).rejects.toThrow("模拟网络中断");
+      expect(seenSnapshots2).toHaveLength(1);
+      expect(seenSnapshots2[0]?.status).toBe("running");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

@@ -61,14 +61,24 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByTestId("loop-comparison")).not.toContainText("还不用改");
     await expect(page.getByTestId("scenario-1")).toContainText("缺货与证据待拍板");
     await expect(page.getByTestId("scenario-1")).not.toContainText("不用改，等你拍板");
+    await expect(page.getByTestId("scenario-2")).toContainText("改 2 轮预算，备货待拍板");
     await expect(page.getByTestId("scenario-3")).toContainText("细节待确认");
     await expect(page.getByTestId("scenario-3")).not.toContainText("改 1 轮就过关");
+    await expect(page.getByTestId("scenario-4")).toContainText("提折扣保本，细节待确认");
     await expect(page.getByTestId("three-strategies")).toBeVisible();
     await expect(page.getByTestId("task-box")).toBeVisible();
     await expect(page.getByTestId("run-button")).toBeVisible();
     await expect(page.getByRole("button", { name: "开始核算" })).toHaveCount(0);
     await expect(page.getByText("折叠水壶 · 淘宝")).toHaveCount(0);
     await expect(page.getByText("跳过动画")).toHaveCount(0);
+
+    // 窄屏（手机宽度）下预设徽章不撑破横向视口
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    );
+    expect(overflow).toBe(false);
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   test("场景 1：零轮经济修正后可驳回并如实封存", async ({ page }) => {
@@ -96,12 +106,15 @@ test.describe("上架评审会签台", () => {
     await expect(roleCard).toContainText("核算单件总成本");
     await expect(roleCard).toContainText("pricing.unit-cost");
 
-    // 评审过程标题对商家可读，展开详情可查事件类型、工具标识与哈希链
+    // 评审过程标题对商家可读，展开详情可查事件类型、工具标识与完整 64 位哈希链
     await expect(page.getByTestId("event-stream-panel")).toContainText("调用工具：拆解评审步骤与验收标准");
     const firstEvent = page.getByTestId("event-item-1");
     await firstEvent.locator("summary").click();
     await expect(firstEvent).toContainText("run.started");
     await expect(firstEvent).toContainText("00000000… →");
+    const fullEventHashText = await page.getByTestId("event-hash-full-1").textContent();
+    expect(fullEventHashText).toContain("prev: " + "0".repeat(64));
+    expect(fullEventHashText).toMatch(/hash:\s*[0-9a-f]{64}/);
 
     // 页脚可展开查看完整 64 位运行指纹
     const runProof = page.getByTestId("run-proof");
@@ -137,6 +150,150 @@ test.describe("上架评审会签台", () => {
 
     await page.getByTestId("replay-sealed-button").click();
     await expect(page.getByTestId("sealed-replay-status")).toContainText("已封存回放（非实时工作）");
+  });
+
+  test("受控慢速 Mock 路径：文案等待期间提前展示证据、保本价、三套策略、风控与修正对比，且拍板按钮禁用直至 awaiting-approval", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByTestId("scenario-3").click();
+
+    // 注入测试专用受控流拆分钩子（Mock）：真实请求后端 /api/agentops/runs/stream，
+    // 先刷出 pre-copy 事件与 event: snapshot，模拟文案调用等待，待测试断言后再放行后续帧。
+    await page.evaluate(() => {
+      const win = window as unknown as {
+        __releaseMockSlowStream?: () => void;
+      };
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.endsWith("/api/agentops/runs/stream")) {
+          return origFetch(input, init);
+        }
+        window.fetch = origFetch;
+        const realRes = await origFetch(input, init);
+        const fullText = await realRes.text();
+        const snapIdx = fullText.indexOf("event: snapshot");
+        const snapEnd = fullText.indexOf("\n\n", snapIdx);
+        const firstHalf = fullText.slice(0, snapEnd + 2);
+        const secondHalf = fullText.slice(snapEnd + 2);
+        const encoder = new TextEncoder();
+
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(firstHalf));
+            win.__releaseMockSlowStream = () => {
+              controller.enqueue(encoder.encode(secondHalf));
+              controller.close();
+            };
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      };
+    });
+
+    await page.getByTestId("run-button").click();
+
+    // 处于 running（等待文案完成）阶段时，前五步实质产物已经可见
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "running");
+    await expect(page.getByTestId("live-ledger")).toContainText("实时会签中 · 尚未封存");
+    await expect(page.getByTestId("live-ledger")).toContainText("纯棉短袖");
+    await expect(page.getByTestId("break-even-price")).toBeVisible();
+    await expect(page.getByTestId("strategy-profit")).toBeVisible();
+    await expect(page.getByTestId("strategy-match")).toBeVisible();
+    await expect(page.getByTestId("strategy-volume")).toBeVisible();
+    await expect(page.getByTestId("loop-comparison")).toContainText("已改 1 / 2 轮");
+    await expect(page.getByTestId("loop-round-1")).toBeVisible();
+
+    // 拍板门在 running 阶段必须禁用，且不出现封存回放或已拍板封存标识
+    await expect(page.getByTestId("approve")).toBeDisabled();
+    await expect(page.getByTestId("reject")).toBeDisabled();
+    await expect(page.getByTestId("replay-sealed-button")).toHaveCount(0);
+    await expect(page.getByTestId("live-ledger")).not.toContainText("已拍板封存");
+    await expect(page.getByTestId("three-strategies")).not.toContainText("已拍板封存");
+    await expect(page.getByTestId("three-strategies")).toContainText("会签进行中 · 暂不可拍板");
+
+    // 放行受控 Mock 的后续帧，进入 awaiting-approval 后拍板按钮才可点击
+    await page.evaluate(() => {
+      const win = window as unknown as { __releaseMockSlowStream?: () => void };
+      win.__releaseMockSlowStream?.();
+    });
+
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
+    await expect(page.getByTestId("approve")).toBeEnabled();
+    await expect(page.getByTestId("reject")).toBeEnabled();
+  });
+
+  test("流式中途网络中断或报错时：不伪造完成态或封存报告，且掌柜可重新发起评审恢复", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("scenario-1").click();
+
+    await page.evaluate(() => {
+      const win = window as unknown as {
+        __failMockSlowStream?: () => void;
+      };
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.endsWith("/api/agentops/runs/stream")) {
+          return origFetch(input, init);
+        }
+        window.fetch = origFetch;
+        const realRes = await origFetch(input, init);
+        const fullText = await realRes.text();
+        const snapIdx = fullText.indexOf("event: snapshot");
+        const snapEnd = fullText.indexOf("\n\n", snapIdx);
+        const firstHalf = fullText.slice(0, snapEnd + 2);
+        const encoder = new TextEncoder();
+
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(firstHalf));
+            win.__failMockSlowStream = () => {
+              controller.enqueue(
+                encoder.encode(
+                  `event: error\ndata: ${JSON.stringify({ code: "run-failed", detail: "模拟文案阶段网络中断" })}\n\n`,
+                ),
+              );
+              controller.close();
+            };
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      };
+    });
+
+    await page.getByTestId("run-button").click();
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "running");
+    await expect(page.getByTestId("break-even-price")).toBeVisible();
+
+    // 触发中途失败
+    await page.evaluate(() => {
+      const win = window as unknown as { __failMockSlowStream?: () => void };
+      win.__failMockSlowStream?.();
+    });
+
+    await expect(page.getByRole("alert")).toContainText("模拟文案阶段网络中断");
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "idle");
+    await expect(page.getByTestId("approve")).toBeDisabled();
+    await expect(page.getByTestId("reject")).toBeDisabled();
+    await expect(page.getByTestId("live-ledger")).not.toContainText("已拍板封存");
+    await expect(page.getByTestId("three-strategies")).not.toContainText("已拍板封存");
+    await expect(page.getByTestId("run-button")).toBeEnabled();
+
+    // 掌柜可再次点击正常重跑并恢复
+    await page.getByTestId("run-button").click();
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByTestId("approve")).toBeEnabled();
   });
 });
 

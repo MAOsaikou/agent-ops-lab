@@ -70,6 +70,10 @@ function formatAgentOpsEvent(event: RunEvent): string {
   return `id: ${String(event.seq)}\nevent: event\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
+function formatAgentOpsSnapshot(run: AgentRun): string {
+  return `event: snapshot\ndata: ${JSON.stringify(run)}\n\n`;
+}
+
 function formatAgentOpsDone(run: AgentRun): string {
   return `event: done\ndata: ${JSON.stringify(run)}\n\n`;
 }
@@ -158,8 +162,11 @@ export function createPricingApp(options: PricingAppOptions): Hono {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          const run = await runAgentWorkflow(input, llmSettings.resolve(), (event) => {
+          const run = await runAgentWorkflow(input, llmSettings.resolve(), (event, snapshot) => {
             controller.enqueue(encoder.encode(formatAgentOpsEvent(event)));
+            if (event.nodeId === "copy" && event.type === "node.output") {
+              controller.enqueue(encoder.encode(formatAgentOpsSnapshot(snapshot)));
+            }
           });
           agentRuns.save(run);
           controller.enqueue(encoder.encode(formatAgentOpsDone(run)));
