@@ -16,4 +16,10 @@ export default defineConfig({
     video: "off",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  webServer: {
+    command: "pnpm dev",
+    url: "http://127.0.0.1:47322",
+    reuseExistingServer: true,
+    timeout: 120_000,
+  },
 });
