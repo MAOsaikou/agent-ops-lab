@@ -12,7 +12,7 @@ const web = spawn(pnpm, ["--dir", "web", "dev"], {
   shell: process.platform === "win32",
 });
 
-process.stdout.write(`U7 界面 http://${WEB_HOST}:${String(WEB_PORT)}\n`);
+process.stdout.write(`掌柜台界面 http://${WEB_HOST}:${String(WEB_PORT)}\n`);
 
 function shutdown(code: number): void {
   if (!web.killed) {

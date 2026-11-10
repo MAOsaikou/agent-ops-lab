@@ -1,24 +1,32 @@
 @import "tailwindcss";
 
 @theme {
-  --color-ink-950: #05080f;
-  --color-ink-900: #090e18;
-  --color-ink-850: #0d1422;
-  --color-ink-800: #121a2b;
-  --color-ink-700: #1b2740;
-  --color-ink-600: #2a3a5c;
-  --color-mist-100: #e8eefc;
-  --color-mist-300: #b4c2dc;
-  --color-mist-400: #93a3c0;
-  --color-mist-500: #74849f;
-  --color-lock-400: #34d399;
-  --color-warn-400: #fbbf24;
-  --color-risk-400: #fb7185;
-  --color-flow-400: #60a5fa;
+  --color-paper-50: #fdfbf5;
+  --color-paper-100: #f7f2e7;
+  --color-paper-150: #f2ebdc;
+  --color-paper-200: #eae1cf;
+  --color-paper-300: #d9cdb4;
+  --color-paper-400: #c2b498;
+  --color-ink-900: #201c16;
+  --color-ink-800: #2c2720;
+  --color-ink-700: #3d362c;
+  --color-ink-600: #554c40;
+  --color-ink-500: #6f6557;
+  --color-ink-400: #8c8172;
+  --color-ink-300: #a99e8d;
+  --color-seal-500: #c4442b;
+  --color-seal-600: #a3341e;
+  --color-seal-100: #f7e2dc;
+  --color-jade-500: #2e6b52;
+  --color-jade-600: #235340;
+  --color-jade-100: #dfeee6;
+  --color-ochre-500: #b07a2e;
+  --color-ochre-100: #f6ecd8;
+  --font-display: Georgia, "Songti SC", "Source Han Serif SC", "SimSun", serif;
   --font-sans: "Inter", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
-  --shadow-panel: 0 1px 1px rgba(0, 0, 0, 0.3), 0 16px 32px -24px rgba(0, 0, 0, 0.85);
-  --shadow-raised: 0 1px 1px rgba(0, 0, 0, 0.35), 0 24px 48px -28px rgba(0, 0, 0, 0.9);
+  --shadow-card: 0 1px 0 0 rgba(32, 28, 22, 0.04), 0 12px 28px -22px rgba(32, 28, 22, 0.5);
+  --shadow-lift: 0 2px 0 0 rgba(32, 28, 22, 0.05), 0 22px 44px -30px rgba(32, 28, 22, 0.65);
 }
 
 * {
@@ -28,68 +36,175 @@
 html,
 body,
 #root {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
   margin: 0;
-  background:
-    radial-gradient(1200px 600px at 15% -10%, rgba(96, 165, 250, 0.14), transparent 60%),
-    radial-gradient(900px 500px at 90% 0%, rgba(52, 211, 153, 0.1), transparent 55%),
-    var(--color-ink-950);
-  color: var(--color-mist-100);
+  background-color: var(--color-paper-100);
+  background-image:
+    radial-gradient(900px 460px at 8% -8%, rgba(196, 68, 43, 0.09), transparent 62%),
+    radial-gradient(760px 420px at 96% 4%, rgba(46, 107, 82, 0.08), transparent 58%),
+    repeating-linear-gradient(0deg, rgba(32, 28, 22, 0.022) 0 1px, transparent 1px 26px);
+  color: var(--color-ink-900);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
-  background: rgba(96, 165, 250, 0.35);
+  background: rgba(196, 68, 43, 0.22);
 }
 
 ::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-ink-600);
+  background: var(--color-paper-300);
   border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-paper-400);
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.react-flow__attribution {
-  display: none;
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
-.react-flow__edge-path {
-  stroke: var(--color-ink-600);
-  stroke-width: 1.4;
+.hairline {
+  background-image: linear-gradient(90deg, transparent, rgba(32, 28, 22, 0.14), transparent);
 }
 
-.react-flow__edge.animated .react-flow__edge-path {
-  stroke: var(--color-flow-400);
-  stroke-dasharray: 6 4;
-}
-
-.react-flow__handle {
-  opacity: 0;
-}
-
-@keyframes pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.45);
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
   }
-  70% {
-    box-shadow: 0 0 0 12px rgba(96, 165, 250, 0);
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise 0.42s cubic-bezier(0.2, 0.75, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease both;
+}
+
+@keyframes stampIn {
+  0% {
+    opacity: 0;
+    transform: scale(1.35) translateY(-6px);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(0.96) translateY(0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(96, 165, 250, 0);
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
-.node-running {
-  animation: pulse-ring 1.6s infinite;
+.stamp-in {
+  animation: stampIn 0.62s cubic-bezier(0.22, 1.2, 0.36, 1) both;
+}
+
+@keyframes drawLine {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.draw-line {
+  transform-origin: left center;
+  animation: drawLine 0.6s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+@keyframes dotPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.dot-pulse {
+  animation: dotPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -180% 0;
+  }
+  to {
+    background-position: 180% 0;
+  }
+}
+
+.shimmer {
+  background-image: linear-gradient(
+    100deg,
+    rgba(32, 28, 22, 0.05) 20%,
+    rgba(196, 68, 43, 0.16) 42%,
+    rgba(32, 28, 22, 0.05) 62%
+  );
+  background-size: 220% 100%;
+  animation: shimmer 1.5s linear infinite;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.pop {
+  animation: pop 0.34s cubic-bezier(0.24, 1.3, 0.4, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .fade-in,
+  .stamp-in,
+  .draw-line,
+  .dot-pulse,
+  .shimmer,
+  .pop {
+    animation: none !important;
+  }
 }
