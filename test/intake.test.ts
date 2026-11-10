@@ -111,6 +111,60 @@ describe("分享文案解析", () => {
     expect(result.fields.filter((field) => field.id !== "services").every((field) => field.needsConfirm)).toBe(true);
     expect(result.checks.find((check) => check.id === "link")?.status).toBe("warn");
   });
+
+  test("官方预设 2（无链接护颈枕）：诚实提取文字证据，不冒充类目为商品名，不把采购/包装/快递当竞品价差距", () => {
+    const preset2 =
+      "评估护颈枕价格与现金流。京东价 ¥89，竞品日单量约 50，采购 18 元，包装 2 元，快递 7 元，平台费率按默认，目标毛利 30%，预算 500 元。";
+    const result = analyzeProductInput({ text: preset2 });
+
+    expect(result.headline).toBe("未附商品链接，已从粘贴文字提取商品资料");
+    expect(result.headline).not.toContain("子 agent");
+
+    const nameField = result.fields.find((field) => field.id === "name");
+    expect(nameField?.display).toBe("护颈枕");
+    expect(nameField?.needsConfirm).toBe(false);
+    expect(result.patch.name).toBe("护颈枕");
+
+    const platformField = result.fields.find((field) => field.id === "platform");
+    expect(platformField?.display).toBe("按默认费率");
+    expect(platformField?.needsConfirm).toBe(false);
+    expect(result.patch.platform).toBeUndefined();
+
+    const ordersField = result.fields.find((field) => field.id === "marketOrders");
+    expect(ordersField?.display).toBe("约 50 单/天（价格带日单量）");
+    expect(ordersField?.needsConfirm).toBe(false);
+    expect(result.patch.marketOrders).toBe(50);
+
+    expect(result.patch.competitorCents).toBe(8900);
+    expect(result.questions.find((question) => question.id === "name")).toBeUndefined();
+    expect(result.questions.find((question) => question.id === "price-gap")).toBeUndefined();
+  });
+
+  test("纯文字无商品名且无链接时：商品名显示待确认而非类目，且追问原因不怪链接缺失", () => {
+    const result = analyzeProductInput({
+      text: "采购 18 元，包装 2 元，快递 7 元，竞品主流价 89 元，目标毛利 30%，预算 500 元。",
+    });
+    const nameField = result.fields.find((field) => field.id === "name");
+    expect(nameField?.display).toBe("待确认");
+    expect(nameField?.needsConfirm).toBe(true);
+    const nameQuestion = result.questions.find((question) => question.id === "name");
+    expect(nameQuestion).toBeDefined();
+    expect(nameQuestion?.why).not.toContain("链接");
+    expect(result.questions.find((question) => question.id === "price-gap")).toBeUndefined();
+  });
+
+  test("泛指令语句不会把『这个拼多多商品』臆造为商品标题，且多零售价仍保留真实价差提示", () => {
+    const generic = analyzeProductInput({
+      text: "分析这个拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。到手价 ¥49，划线价 ¥79，采购 18 元，包装 2 元，快递 7 元。",
+    });
+    expect(generic.patch.name).toBeUndefined();
+    expect(generic.fields.find((field) => field.id === "name")?.display).toBe("待确认");
+    const gap = generic.questions.find((question) => question.id === "price-gap");
+    expect(gap).toBeDefined();
+    expect(gap?.ask).toContain("¥49.00");
+    expect(gap?.ask).toContain("¥79.00");
+    expect(gap?.ask).not.toContain("¥2.00");
+  });
 });
 
 describe("确定性", () => {

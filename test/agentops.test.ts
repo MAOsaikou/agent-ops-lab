@@ -95,17 +95,27 @@ describe("AgentOps 商品评审工作流", () => {
     }
   });
 
-  test("控制台场景 1 遇到证据边界失败时不会空转砍推广预算", async () => {
+  test("控制台场景 1 遇到证据边界与备货风险时不会空转砍推广预算", async () => {
     const run = await runAgentWorkflow({
       id: "console-ex1",
       taskText: consoleExample1,
       autoApprove: true,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    expect(run.verifications.some((item) => item.title === "证据边界清晰" && item.status === "fail")).toBe(true);
+    expect(run.verifications.some((item) => item.title === "30 天不缺货" && item.status === "fail")).toBe(true);
+    expect(run.verifications.some((item) => item.title === "证据边界清晰" && item.status === "warn")).toBe(true);
     expect(run.loops).toHaveLength(0);
     expect(run.events.some((event) => event.type === "loop.adjusted")).toBe(false);
     expect(run.artifacts.product?.adDailyBudgetCents).toBe(3000);
+
+    const evidenceFailRun = await runAgentWorkflow({
+      id: "console-ex1-gap",
+      taskText: `${consoleExample1} 原价 ¥69.90。`,
+      autoApprove: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(evidenceFailRun.verifications.some((item) => item.title === "证据边界清晰" && item.status === "fail")).toBe(true);
+    expect(evidenceFailRun.loops).toHaveLength(0);
   });
 
   test("真实推广占比冲突触发定向 Self-Loop、记录前后快照并拉低责任 Agent 下轮调度分", async () => {
@@ -175,7 +185,7 @@ describe("AgentOps 商品评审工作流", () => {
   });
 
   test("风控失败会触发真实的反馈循环并留下调整记录", async () => {
-    const strict = `分析这个商品是否值得上架：https://shop.example.com/products/unknown-item。采购价 16 元，包材 1.5 元，快递 6.5 元，目标毛利 30%。`;
+    const strict = `分析这个商品是否值得上架：https://shop.example.com/products/unknown-item。券后 ¥19.90，原价 ¥39.90，已拼 10 万+。采购价 16 元，包材 1.5 元，快递 6.5 元，目标毛利 30%，推广预算 220 元。`;
     const run = await runAgentWorkflow({ id: "loop-run", taskText: strict, autoApprove: true, createdAt: "2026-01-01T00:00:00.000Z" });
     expect(run.events.some((event) => event.type === "loop.adjusted")).toBe(true);
     expect(run.loops.length).toBeGreaterThanOrEqual(1);

@@ -33,20 +33,52 @@ function firstPlatform(links: readonly LinkHit[]): PlatformId | null {
 function buildFields(links: readonly LinkHit[], text: string, facts: ReturnType<typeof parseText>): readonly IntakeField[] {
   const platformLink = links.find((link) => link.platform !== null);
   const platform = firstPlatform(links) ?? undefined;
-  const name = facts.title?.text ?? facts.category ?? "未识别商品名";
+  const defaultFeeMatch = /平台费率按默认|费率按默认/.exec(text);
+  const platformDisplay =
+    platform !== undefined
+      ? PLATFORM_PRESETS[platform].label
+      : defaultFeeMatch !== null
+        ? "按默认费率"
+        : "未确认";
+  const platformEvidence: Evidence[] =
+    platformLink !== undefined
+      ? [{ kind: "link", quote: platformLink.host }]
+      : defaultFeeMatch !== null
+        ? [{ kind: "text", quote: defaultFeeMatch[0] }]
+        : [];
+  const platformNeedsConfirm = platform === undefined && defaultFeeMatch === null;
+
+  const name = facts.title?.text ?? "待确认";
   const nameEvidence: Evidence[] = facts.title === null ? [] : [{ kind: "text", quote: facts.title.quote }];
   const priceEvidence: Evidence[] = facts.bestPrice === null ? [] : [{ kind: "text", quote: facts.bestPrice.quote }];
-  const salesEvidence: Evidence[] = facts.sales.length === 0 ? [] : [{ kind: "text", quote: facts.sales[0]?.quote ?? "" }];
+  const orderQuoteMatch =
+    /(?:竞品\s*)?(?:日销(?:量)?|日单(?:量)?|日均(?:单量|销量)?|每天(?:单量|销量)?)\s*[:：]?\s*(?:约|大概|大约)?\s*[0-9]+(?:\.[0-9]+)?\s*(?:万|千|[wWkK])?/.exec(
+      text,
+    );
+  const salesDisplay =
+    facts.orderHint !== null
+      ? `约 ${String(facts.orderHint)} 单/天（价格带日单量）`
+      : facts.sales[0] === undefined
+        ? "待确认"
+        : `${String(facts.sales[0].count)} 件（单件商品，不是价格带日单量）`;
+  const salesEvidence: Evidence[] =
+    facts.orderHint !== null && orderQuoteMatch !== null
+      ? [{ kind: "text", quote: orderQuoteMatch[0] }]
+      : facts.sales.length === 0
+        ? []
+        : [{ kind: "text", quote: facts.sales[0]?.quote ?? "" }];
+  const salesNeedsConfirm = facts.orderHint === null;
+
   const keywords = facts.keywords.join(",");
   const categoryEvidence: Evidence[] = facts.category === null ? [] : [{ kind: "text", quote: facts.categoryWords.join("、") }];
   const serviceEvidence: Evidence[] = facts.services.length === 0 ? [] : [{ kind: "text", quote: "商品文本中的承诺词" }];
   return [
-    field("platform", "平台", platform === undefined ? "未确认" : PLATFORM_PRESETS[platform].label, platformLink === undefined ? [] : [{ kind: "link", quote: platformLink.host }], platform === undefined),
+    field("platform", "平台", platformDisplay, platformEvidence, platformNeedsConfirm),
     field("name", "商品名", name, nameEvidence, facts.title === null),
     field("category", "类目", facts.category ?? "待确认", categoryEvidence, facts.category === null),
     field("keywords", "关键词", keywords.length === 0 ? "待补充" : keywords, nameEvidence, keywords.length === 0),
     field("competitorCents", "参考价", facts.bestPrice === null ? "待确认" : money(facts.bestPrice.cents), priceEvidence, facts.bestPrice === null),
-    field("marketOrders", "可见销量", facts.sales[0] === undefined ? "待确认" : `${String(facts.sales[0].count)} 件（单件商品，不是价格带日单量）`, salesEvidence, true),
+    field("marketOrders", "可见销量", salesDisplay, salesEvidence, salesNeedsConfirm),
     field("services", "服务承诺", facts.services.length === 0 ? "未识别" : facts.services.join("、"), serviceEvidence, false),
   ];
 }
@@ -133,7 +165,12 @@ function buildQuestions(facts: ReturnType<typeof parseText>, links: readonly Lin
   if (facts.title === null) {
     scored.push({
       priority: 5,
-      question: { id: "name", ask: "这件商品叫什么？", why: "链接里没有标题，本机也不联网读详情。", options: [] },
+      question: {
+        id: "name",
+        ask: "这件商品叫什么？",
+        why: links.length > 0 ? "链接里没有标题，本机也不联网读详情。" : "粘贴的文字里没识别出明确商品名，补上后方便生成标题和核对类目。",
+        options: [],
+      },
     });
   }
 
@@ -183,10 +220,16 @@ export function analyzeProductInput(input: IntakeInput): IntakeResult {
   ];
   const stats = { chars: text.length, lines: text.length === 0 ? 0 : text.split(/\r?\n/).length, links: links.length, digits: (text.match(/[0-9]/g) ?? []).length };
   const fingerprint = sha256Hex(canonicalJson({ text: input.text, links: links.map((link) => link.url), patch, stats }));
+  const headline =
+    links.length > 0
+      ? `识别到 ${String(links.length)} 条商品链接`
+      : text.length > 0
+        ? "未附商品链接，已从粘贴文字提取商品资料"
+        : "请粘贴商品链接、标题或经营信息";
   return {
     version: 1,
     fingerprint,
-    headline: links.length > 0 ? `识别到 ${String(links.length)} 条商品链接` : "先把商品资料交给链接识别子 agent",
+    headline,
     stats,
     plan: ["识别商品链接平台与页面类型", "从文字中提取价格、销量、标题和服务承诺", "逐字段保留证据并标出不确定项", "把可确认字段交给定价核算"],
     links,
