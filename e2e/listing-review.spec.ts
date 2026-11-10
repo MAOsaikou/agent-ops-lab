@@ -75,7 +75,7 @@ test.describe("上架评审会签台", () => {
     });
     await expect(page.getByTestId("live-ledger")).toContainText("商品证据与待确认项");
     await expect(page.getByTestId("break-even-price")).toBeVisible();
-    await expect(page.getByTestId("loop-comparison")).toContainText("0 次经济参数循环");
+    await expect(page.getByTestId("loop-comparison")).toContainText("不用改价或预算");
     await expect(page.getByTestId("strategy-profit")).toBeVisible();
     await expect(page.getByTestId("strategy-match")).toBeVisible();
     await expect(page.getByTestId("strategy-volume")).toBeVisible();
@@ -95,7 +95,7 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
       timeout: 30_000,
     });
-    await expect(page.getByTestId("loop-comparison")).toContainText("已执行 2 / 2 轮额外经济修正");
+    await expect(page.getByTestId("loop-comparison")).toContainText("已改 2 / 2 轮");
     await expect(page.getByTestId("loop-round-1")).toBeVisible();
     await expect(page.getByTestId("loop-round-2")).toBeVisible();
     await expect(page.getByTestId("loop-comparison")).toContainText("日推广预算");
@@ -108,7 +108,7 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByText("已拍板封存").first()).toBeVisible();
 
     await page.getByTestId("replay-sealed-button").click();
-    await expect(page.getByText("已封存事件回放（非实时工作）")).toBeVisible();
+    await expect(page.getByText("正在回放")).toBeVisible();
   });
 });
 
