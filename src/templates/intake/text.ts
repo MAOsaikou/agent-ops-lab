@@ -45,7 +45,10 @@ const CURRENCY_PRICE = /[¥￥]\s*([0-9]{1,6}(?:\.[0-9]{1,2})?)/g;
 const YUAN_PRICE = /([0-9]{1,6}(?:\.[0-9]{1,2})?)\s*元/g;
 
 const NON_RETAIL_PRICE_PREFIX =
-  /(?:采购(?:价|单价|价格|成本)?|进货(?:价|单价|价格|成本)?|拿货(?:价|单价|价格|成本)?|供货(?:价|单价|价格)?|出厂(?:价|单价|价格)?|成本(?:价|单价)?|包材(?:费|价|成本)?|包装(?:费|价|成本)?|快递(?:费|价|成本)?|运费|邮费|物流(?:费|价|成本)?|(?:推广|投放|日|广告)?预算|推广费|广告费|投放费|(?:可)?周转(?:资金|金)|备货(?:资金|金)|启动资金|保证金|押金|佣金|扣点|满减|立减|满)\s*[:：]?\s*(?:约|大概|大约|按)?\s*$/;
+  /(?:采购(?:价|单价|价格|成本|费)?|进货(?:价|单价|价格|成本|费)?|拿货(?:价|单价|价格|成本|费)?|供货(?:价|单价|价格)?|出厂(?:价|单价|价格)?|成本(?:价|单价)?|包材(?:费|价|单价|成本)?|包装(?:材料|费|价|单价|成本)?|耗材(?:费|价|成本)?|纸箱(?:费|价|成本)?|打包(?:费|价|成本)?|快递(?:费|价|单价|成本)?|运费|邮费|物流(?:费|价|单价|成本)?|发货(?:费|成本|快递|运费)?|首重(?:费|运费)?|(?:推广|投放|投流|日|广告|直通车)?(?:预算|限额|日限额)|(?:日|每天|每日|一天)?(?:推广|投放|投流|广告|直通车|烧车)(?:费|预算|成本|金额)?|(?:可)?周转(?:资金|金|本金)?|备货(?:资金|金|本金|款)?|(?:启动|流动|可用|手里|压货|进货|囤货)(?:资金|金|本金|款)|本金|保证金|押金|佣金|扣点|满减|立减|满)[\s:：]*(?:(?:每(?:件|个|单|套|双|包|盒|袋|天|日)|单(?:件|价)|一(?:件|个|单|天)|日均|是|为|有|在|要|需|需要|准备(?:了)?|预留(?:了)?|留(?:了)?|给|控制在|不超过|最多|至少|先按|按|约|大概|大约|差不多)\s*)*$/;
+
+const NON_RETAIL_PRICE_SUFFIX =
+  /^\s*(?:\/(?:天|日|单|件|个))?\s*(?:的)?\s*(?:采购(?:价|成本|费)?|进货(?:价|成本|费)?|拿货(?:价|成本|费)?|供货(?:价)?|成本(?:价)?|包材(?:费|成本)?|包装(?:费|成本|材料)?|耗材(?:费)?|纸箱(?:费)?|打包(?:费)?|(?:发)?快递(?:费)?|运费|邮费|物流(?:费)?|发货|(?:推广|投放|投流|广告|直通车)(?:预算|费|成本)?|(?:日|总)?预算|(?:可)?周转(?:资金|金)?|备货(?:资金|金|款|周转)?|(?:流动|启动|压货|可用)?(?:资金|本金)|保证金|押金)/;
 
 const STRONG_PRICE_LABELS = [
   "到手价",
@@ -176,9 +179,27 @@ function scaleCount(raw: string, unit: string | undefined): number | null {  con
   return Math.round(value * factor);
 }
 
-function isNonRetailPriceContext(text: string, matchIndex: number): boolean {
-  const prefix = text.slice(Math.max(0, matchIndex - 20), matchIndex);
-  return NON_RETAIL_PRICE_PREFIX.test(prefix);
+const RETAIL_PRICE_PREFIX = new RegExp(`${PRICE_LABEL}\\s*[:：]?\\s*$`);
+
+const GENERIC_SUBJECT_NOUNS =
+  /^(?:(?:同行|店里|店铺|手头|手里|仓库|平台|线上|线下|厂家|档口|源头|跨境|国内|应季|换季|夏季|冬季|春秋|普通|基础|常规|主推|引流|利润|拿货|代发|测试|备选|待定|未知|其他|一般|热门|冷门)*(?:商品|宝贝|链接|品|货品|样品|产品|款|款式|单品|店铺|类目|品类|方案|价格|定价|现金流|成本|毛利|利润|生意|项目|货|货源|尾货|现货|白牌|散装|新品|爆款|同款|老款|新款|竞品|同行|同行款|竞品款|主推款|引流款|利润款|拿货款|代发款|测试款|基础款|常规款|普通款|女装|男装|童装|上衣|女装上衣|家居日用|家纺|数码配件|食品零食|美妆个护|宠物用品|母婴用品|鞋包配饰|户外水具))$/;
+
+function isNonRetailPriceContext(text: string, matchIndex: number, matchLength = 0): boolean {
+  const prefix = text.slice(Math.max(0, matchIndex - 24), matchIndex);
+  if (NON_RETAIL_PRICE_PREFIX.test(prefix)) {
+    return true;
+  }
+  if (matchLength > 0 && !RETAIL_PRICE_PREFIX.test(prefix)) {
+    const suffix = text.slice(matchIndex + matchLength, matchIndex + matchLength + 18);
+    const suffixMatch = NON_RETAIL_PRICE_SUFFIX.exec(suffix);
+    if (suffixMatch !== null) {
+      const afterSuffix = suffix.slice(suffixMatch[0].length);
+      if (!/^\s*[:：]?\s*(?:每(?:件|个|单|天|日)|约|大概|大约|是|为)?\s*[¥￥]?\s*[0-9]/.test(afterSuffix)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function collectPrices(text: string): readonly PriceChoice[] {
@@ -205,7 +226,7 @@ function collectPrices(text: string): readonly PriceChoice[] {
   }
   for (const match of text.matchAll(CURRENCY_PRICE)) {
     const index = match.index ?? 0;
-    if (isNonRetailPriceContext(text, index)) {
+    if (isNonRetailPriceContext(text, index, match[0].length)) {
       continue;
     }
     const cents = centsOf(match[1] ?? "");
@@ -216,7 +237,7 @@ function collectPrices(text: string): readonly PriceChoice[] {
   }
   for (const match of text.matchAll(YUAN_PRICE)) {
     const index = match.index ?? 0;
-    if (isNonRetailPriceContext(text, index)) {
+    if (isNonRetailPriceContext(text, index, match[0].length)) {
       continue;
     }
     const cents = centsOf(match[1] ?? "");
@@ -282,18 +303,20 @@ function cleanName(raw: string): string {
 
 function cleanTaskSubject(raw: string): string | null {
   const stripped = cleanName(raw)
-    .replace(/^(?:这个|这款|这件|这条|该|本)+/g, "")
+    .replace(/^(?:我们|咱们|我|店里|店铺|手头|手里|仓库|厂家|档口|同行|竞品)+/g, "")
+    .replace(/^(?:这个|这款|这件|这条|这批|这单|该|本)+/g, "")
     .replace(/^(?:淘宝|天猫|拼多多|抖音|京东|小红书|快手|1688|阿里巴巴)+/gi, "")
-    .replace(/^(?:这个|这款|这件|这条|该|本)+/g, "")
-    .replace(/(?:这个|这款|这件|这条)?(?:商品|宝贝|链接|产品|单品|货品|样品)$/g, "")
+    .replace(/^(?:我们|咱们|我|店里|店铺|手头|手里|仓库|厂家|档口|同行|竞品)+/g, "")
+    .replace(/^(?:这个|这款|这件|这条|这批|这单|该|本)+/g, "")
+    .replace(/(?:这个|这款|这件|这条|这批|这单)?(?:商品|宝贝|链接|产品|单品|货品|样品)$/g, "")
     .trim();
   if (cjkCount(stripped) < 2 || stripped.length > 20) {
     return null;
   }
-  if (/^(?:商品|宝贝|链接|品|货品|样品|产品|款|单品|店铺|类目|方案|价格|现金流|成本|毛利)$/.test(stripped)) {
+  if (GENERIC_SUBJECT_NOUNS.test(stripped)) {
     return null;
   }
-  if (/(?:采购|进货|拿货|包材|包装|快递|运费|物流|预算|毛利|周转|日单|销量|费率|链接|网址|http)/i.test(stripped)) {
+  if (/(?:采购|进货|拿货|供货|出厂|成本|包材|包装|耗材|快递|运费|邮费|物流|预算|投流|直通车|毛利|利润|周转|备货|本金|日单|销量|费率|链接|网址|http|值得|能不能|上架)/i.test(stripped)) {
     return null;
   }
   return stripped;
@@ -336,14 +359,20 @@ function collectTitles(text: string): readonly TitleHit[] {
     if (/^https?:\/\//i.test(raw)) {
       return;
     }
-    if (/^(?:请|帮我)?(?:评估|分析|测算|评审|看看|算算)/.test(raw)) {
+    if (/^(?:请|麻烦|帮忙|帮我|想|准备|打算|先|要|能否|能不能)?\s*(?:帮我|帮忙)?\s*(?:评估|分析|测算|评审|看看|看下|算算|算下|核对|核算|上架)/.test(raw)) {
+      return;
+    }
+    if (/(?:采购|进货|拿货|供货|出厂|包材|包装(?:费|成本|材料)?|耗材|纸箱|打包|快递|运费|邮费|物流|目标毛利|毛利率|利润率|推广预算|日预算|投放预算|广告预算|投流|直通车|周转(?:资金|金)?|备货(?:资金|金)?|流动资金|启动资金|本金|平台费率|费率按默认)/.test(raw)) {
       return;
     }
     const cleaned = cleanName(raw);
     if (cjkCount(cleaned) < 2) {
       return;
     }
-    if (/^(?:这个|这款|这件)?(?:商品|宝贝|链接|产品|单品)$/.test(cleaned)) {
+    if (GENERIC_SUBJECT_NOUNS.test(cleaned)) {
+      return;
+    }
+    if (/(?:是否值得|值不值得|能不能|好不好|可以吗|怎么样|怎么定|多少钱|上架)/.test(cleaned)) {
       return;
     }
     hits.push({ text: cleaned, quote: raw.slice(0, 40), score: 2 });

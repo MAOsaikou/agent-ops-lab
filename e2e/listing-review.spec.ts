@@ -59,12 +59,14 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByTestId("loop-comparison")).toBeVisible();
     await expect(page.getByTestId("loop-comparison")).toContainText("待核算");
     await expect(page.getByTestId("loop-comparison")).not.toContainText("还不用改");
-    await expect(page.getByTestId("scenario-1")).toContainText("缺货与证据待拍板");
+    await expect(page.getByTestId("scenario-1")).toContainText("链接文案 · 紧周转");
     await expect(page.getByTestId("scenario-1")).not.toContainText("不用改，等你拍板");
-    await expect(page.getByTestId("scenario-2")).toContainText("改 2 轮预算，备货待拍板");
-    await expect(page.getByTestId("scenario-3")).toContainText("细节待确认");
+    await expect(page.getByTestId("scenario-2")).toContainText("无链接 · 高预算");
+    await expect(page.getByTestId("scenario-3")).toContainText("测预算收敛");
     await expect(page.getByTestId("scenario-3")).not.toContainText("改 1 轮就过关");
-    await expect(page.getByTestId("scenario-4")).toContainText("提折扣保本，细节待确认");
+    await expect(page.getByTestId("scenario-3")).not.toContainText("细节待确认");
+    await expect(page.getByTestId("scenario-4")).toContainText("薄利 · 测活动保本");
+    await expect(page.getByTestId("scenario-4")).not.toContainText("细节待确认");
     await expect(page.getByTestId("three-strategies")).toBeVisible();
     await expect(page.getByTestId("task-box")).toBeVisible();
     await expect(page.getByTestId("run-button")).toBeVisible();
@@ -72,12 +74,34 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByText("折叠水壶 · 淘宝")).toHaveCount(0);
     await expect(page.getByText("跳过动画")).toHaveCount(0);
 
-    // 窄屏（手机宽度）下预设徽章不撑破横向视口
-    await page.setViewportSize({ width: 390, height: 844 });
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    );
-    expect(overflow).toBe(false);
+    // 窄屏（390px 与 320px）下：横向 0 溢出、空态拍板说明为正常横向行而非竖排单字列、任务输入框高度充足可读写
+    // 视口刚缩小后 layout 可能短暂残留上一宽度，等横向溢出归零后再量其他布局
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect
+        .poll(async () =>
+          page.evaluate(
+            () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          ),
+        )
+        .toBe(0);
+      const idleLayout = await page.evaluate(() => {
+        const taskBox = document.querySelector('[data-testid="task-box"]');
+        const gateCopy = Array.from(
+          document.querySelectorAll('[data-testid="three-strategies"] p'),
+        ).find((el) => el.textContent?.includes("评审结束后"));
+        const taskRect = taskBox?.getBoundingClientRect();
+        const copyRect = gateCopy?.getBoundingClientRect();
+        return {
+          taskHeight: taskRect ? Math.round(taskRect.height) : 0,
+          copyWidth: copyRect ? Math.round(copyRect.width) : 0,
+          copyHeight: copyRect ? Math.round(copyRect.height) : 0,
+        };
+      });
+      expect(idleLayout.taskHeight).toBeGreaterThanOrEqual(64);
+      expect(idleLayout.copyWidth).toBeGreaterThanOrEqual(width - 80);
+      expect(idleLayout.copyHeight).toBeLessThanOrEqual(56);
+    }
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
@@ -173,6 +197,16 @@ test.describe("上架评审会签台", () => {
     expect(mobileMeasures.approve?.bottom).toBeLessThanOrEqual(844);
     expect(mobileMeasures.reject?.bottom).toBeLessThanOrEqual(844);
     expect(mobileMeasures.strategyMatch?.bottom).toBeLessThanOrEqual(844);
+
+    // 320px 超窄屏同样保持横向 0 溢出（视口刚缩小后需等 layout 完成，避免量到上一宽度的残留）
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ),
+      )
+      .toBe(0);
 
     // 页脚默认表面不再暴露 autoApprove 开发者兼容说明，展开凭证后可见
     await expect(page.locator("footer > div").first()).not.toContainText("autoApprove");

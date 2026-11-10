@@ -107,25 +107,25 @@ const SCENARIO_PRESETS: readonly ScenarioPreset[] = [
   {
     id: "pdd-evidence-boundary",
     label: "拼多多短袖",
-    badge: "缺货与证据待拍板",
+    badge: "链接文案 · 紧周转",
     text: "分析这个拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。分享文案：纯棉短袖女夏季宽松，券后 ¥39.90，已拼 10 万+，包邮、七天无理由。采购 16 元，包材 1.5 元，快递 6.5 元，目标毛利 25%，可周转资金 300 元。",
   },
   {
     id: "jd-pillow-2loops",
     label: "京东护颈枕",
-    badge: "改 2 轮预算，备货待拍板",
+    badge: "无链接 · 高预算",
     text: "评估护颈枕价格与现金流。京东价 ¥89，竞品日单量约 50，采购 18 元，包装 2 元，快递 7 元，平台费率按默认，目标毛利 30%，预算 500 元。",
   },
   {
     id: "pdd-ad-converge",
     label: "拼多多短袖 · 推广偏高",
-    badge: "降预算 1 轮，细节待确认",
+    badge: "测预算收敛",
     text: "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：纯棉短袖，券后价 ¥39.90。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品主流价 39.90 元，日单量 15，目标毛利 25%，推广预算 220 元，可周转资金 5000 元。",
   },
   {
     id: "pdd-promo-floor",
     label: "加厚收纳箱",
-    badge: "提折扣保本，细节待确认",
+    badge: "薄利 · 测活动保本",
     text: "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：加厚收纳箱，售价 ¥38.90。采购价 25 元，包材 2 元，快递 6 元，竞品主流价 38.90 元，日单量 60，目标毛利 5%，推广预算 10 元，可周转资金 5000 元。",
   },
 ];
@@ -891,13 +891,13 @@ export function AgentOpsConsole(): React.JSX.Element {
           }
         />
 
-        <div className="flex flex-col gap-2 px-3.5 py-2 sm:gap-3 sm:px-5 sm:py-4">
+        <div className="flex flex-col gap-1.5 px-3 py-2 sm:gap-3 sm:px-5 sm:py-4">
           <textarea
             data-testid="task-box"
             value={task}
             onChange={(event) => setTask(event.target.value)}
-            rows={2}
-            className="w-full resize-y rounded-xl bg-paper-100/90 px-3 py-1.5 text-[12px] leading-snug text-ink-900 outline-none ring-1 ring-inset ring-paper-300 focus:bg-paper-50 focus:ring-2 focus:ring-seal-500/45 sm:px-3.5 sm:py-2.5 sm:text-[13px] sm:leading-relaxed"
+            rows={3}
+            className="min-h-[68px] w-full resize-y break-all rounded-xl bg-paper-100/90 px-2.5 py-1.5 text-[12px] leading-[1.45] text-ink-900 outline-none ring-1 ring-inset ring-paper-300 focus:bg-paper-50 focus:ring-2 focus:ring-seal-500/45 sm:min-h-[84px] sm:px-3.5 sm:py-2.5 sm:text-[13px] sm:leading-relaxed"
             placeholder="贴商品链接或分享文案，写上采购价、包材、快递、目标毛利和能周转的资金…"
           />
 
@@ -910,7 +910,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                   data-testid={`scenario-${String(index + 1)}`}
                   onClick={() => setTask(preset.text)}
                   className={cn(
-                    "inline-flex flex-nowrap items-center gap-1 overflow-hidden rounded-lg px-2 py-1 text-left text-[11px] ring-1 ring-inset transition-colors sm:flex-wrap sm:gap-1.5 sm:px-2.5 sm:py-1.5 sm:text-[11.5px]",
+                    "inline-flex min-w-0 flex-nowrap items-center gap-1 overflow-hidden rounded-lg px-2 py-1 text-left text-[11px] ring-1 ring-inset transition-colors sm:flex-wrap sm:gap-1.5 sm:px-2.5 sm:py-1.5 sm:text-[11.5px]",
                     task === preset.text
                       ? "bg-ink-900 text-paper-50 ring-ink-900"
                       : "bg-paper-100 text-ink-700 ring-paper-300 hover:bg-paper-150",
@@ -977,8 +977,15 @@ export function AgentOpsConsole(): React.JSX.Element {
             />
 
             <div className="flex flex-col gap-2 p-2.5 sm:gap-5 sm:p-5">
-              <div className="flex flex-col gap-1.5 rounded-2xl border-2 border-seal-500/35 bg-seal-100/30 px-2.5 py-2 sm:gap-2 sm:px-4 sm:py-3.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+              <div
+                className={cn(
+                  "flex flex-col gap-1.5 rounded-2xl px-2.5 py-2 sm:gap-2 sm:px-4 sm:py-3.5",
+                  run === null
+                    ? "border border-paper-300 bg-paper-100/70"
+                    : "border-2 border-seal-500/35 bg-seal-100/30",
+                )}
+              >
+                <div className="flex flex-col gap-1.5 lg:flex-row lg:items-center lg:justify-between lg:gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                       <Gavel className="h-3.5 w-3.5 text-seal-600 sm:h-4 sm:w-4" />
@@ -1004,16 +1011,18 @@ export function AgentOpsConsole(): React.JSX.Element {
                         <Pill tone="ochre">已改 {String(run.loops.length)} / 2 轮</Pill>
                       ) : null}
                       {breakEvenCents > 0 ? (
-                        <Pill tone="ink">保本红线 {money(breakEvenCents)}</Pill>
+                        <Pill tone="ink" className="hidden sm:inline-flex">
+                          保本红线 {money(breakEvenCents)}
+                        </Pill>
                       ) : null}
                     </div>
-                    <p className="mt-0.5 text-[11px] leading-snug text-ink-600 sm:mt-1 sm:text-[12px] sm:leading-relaxed">
+                    <p className="mt-0.5 text-[11.5px] leading-snug text-ink-600 sm:mt-1 sm:text-[12px] sm:leading-relaxed">
                       {run === null
                         ? "评审结束后，在这里选稳价、跟价或冲量，然后通过或驳回。"
                         : currentStatus === "running"
                           ? "三套报价与风控已出，可先检视下方方案；文案节点完成后解锁拍板。"
                           : run.status === "awaiting-approval"
-                            ? `现在选的是「${strategyName(activeCandidateId)}」${activeCandidate ? `（售价 ${money(activeCandidate.priceCents)}，毛利 ${pct(activeCandidate.evaluation.daily.margin)}）` : ""}。通过后会按这个方案记下。`
+                            ? `现在选的是「${strategyName(activeCandidateId)}」${activeCandidate ? `（售价 ${money(activeCandidate.priceCents)}，毛利 ${pct(activeCandidate.evaluation.daily.margin)}${breakEvenCents > 0 ? `，保本红线 ${money(breakEvenCents)}` : ""}）` : ""}。通过后会按这个方案记下。`
                             : run.status === "rejected"
                               ? "这次方案已被驳回，不能再改决定。"
                               : `已按「${strategyName(run.artifacts.chosenId)}」记下。`}
@@ -1049,7 +1058,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                       data-testid="reject"
                       variant="ghost"
                       size="sm"
-                      className="h-7 border border-seal-500/40 px-2.5 text-[12px] text-seal-600 hover:bg-seal-100/50 sm:h-10 sm:px-4 sm:text-[13.5px]"
+                      className="h-7 border border-seal-500/40 px-2.5 text-[12px] text-seal-600 hover:bg-seal-100/50 disabled:border-paper-300 disabled:bg-paper-200 disabled:text-ink-400 disabled:ring-0 sm:h-10 sm:px-4 sm:text-[13.5px]"
                       disabled={busy || run?.status !== "awaiting-approval" || decisionBusy}
                       onClick={() => {
                         void handleDecision("reject");
@@ -1275,7 +1284,7 @@ export function AgentOpsConsole(): React.JSX.Element {
               }
             />
 
-            <div className="flex flex-col gap-3.5 p-5">
+            <div className="flex flex-col gap-3 p-3.5 sm:gap-3.5 sm:p-5">
               <div className="grid gap-3.5 lg:grid-cols-2">
                 <div className="rounded-xl border border-paper-300 bg-paper-100/50 p-4">
                   <div className="flex items-center justify-between gap-2">
@@ -1383,7 +1392,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-1.5 text-[11.5px] tabular">
+                      <div className="grid grid-cols-2 gap-1.5 text-[11.5px] tabular sm:grid-cols-3">
                         <div className="rounded-lg bg-paper-50 px-2.5 py-1.5 ring-1 ring-inset ring-paper-200">
                           <span className="text-ink-500">采购：</span>
                           <span className="font-medium text-ink-900">{money(unit.buyCents)}</span>
@@ -1433,7 +1442,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                     <p className="mt-2 text-[12.5px] text-ink-500">还没给出报价。</p>
                   ) : (
                     <div className="mt-2.5 flex flex-col gap-2">
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                         {run.artifacts.prices.map((priceRow) => {
                           const fullCand = candidates.find((c) => c.id === priceRow.id);
                           const isChosen = priceRow.id === run.artifacts.chosenId;

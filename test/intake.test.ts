@@ -165,6 +165,35 @@ describe("分享文案解析", () => {
     expect(gap?.ask).toContain("¥79.00");
     expect(gap?.ask).not.toContain("¥2.00");
   });
+
+  test("相近口语表达（每件/每天/倒装成本与流动资金、泛名词与多行成本输入）不会误判为商品名或零售价差", () => {
+    const naturalCostPhrasing = analyzeProductInput({
+      text: "评估硅胶折叠水壶的价格与现金流。售价 ¥59，采购每件 18 元，包装材料每个大概 2 元，快递每单 6 元，推广预算每天控制在 300 元，可周转资金准备了 5000 元。",
+    });
+    expect(naturalCostPhrasing.patch.name).toBe("硅胶折叠水壶");
+    expect(naturalCostPhrasing.patch.competitorCents).toBe(5900);
+    expect(naturalCostPhrasing.questions.find((q) => q.id === "price-gap")).toBeUndefined();
+
+    const invertedCostPhrasing = analyzeProductInput({
+      text: "商品名：加厚猫砂盆，现价 ¥45。18 元拿货，2 元包材，6 元发快递，200 元推广预算，3000 元备货周转。",
+    });
+    expect(invertedCostPhrasing.patch.name).toBe("加厚猫砂盆");
+    expect(invertedCostPhrasing.patch.competitorCents).toBe(4500);
+    expect(invertedCostPhrasing.questions.find((q) => q.id === "price-gap")).toBeUndefined();
+
+    for (const genericPrompt of [
+      "帮我测算一下这款京东新品的价格与现金流。京东价 ¥89，采购 18 元。",
+      "评估一下同行竞品的利润。售价 ¥69，进货成本是 ¥22，运费单件 6 元。",
+      "分析一下店里这批货能不能上架：售价 ¥49，拿货 15 元。",
+      "评估一下女装上衣的价格与现金流。售价 ¥39.90，采购 16 元。",
+      "帮忙看看这个拼多多链接能不能做\nhttps://mobile.yangkeduo.com/goods.html?goods_id=412345678901\n进货每件 16 元，耗材 1.5 元，发快递 6.5 元，一天投流 200 元，压货本金 3000 元，售价 ¥39.90",
+    ]) {
+      const parsed = analyzeProductInput({ text: genericPrompt });
+      expect(parsed.patch.name).toBeUndefined();
+      expect(parsed.fields.find((f) => f.id === "name")?.display).toBe("待确认");
+      expect(parsed.questions.find((q) => q.id === "price-gap")).toBeUndefined();
+    }
+  });
 });
 
 describe("确定性", () => {

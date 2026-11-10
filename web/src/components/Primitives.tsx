@@ -35,7 +35,7 @@ export function PanelHead({
           <div className="mt-0.5 text-[12px] leading-snug text-ink-500 sm:text-[12.5px] sm:leading-relaxed">{desc}</div>
         )}
       </div>
-      {right === undefined ? null : <div className="shrink-0">{right}</div>}
+      {right === undefined ? null : <div className="min-w-0 max-w-full shrink-0">{right}</div>}
     </div>
   );
 }
@@ -62,7 +62,7 @@ export function Pill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-md px-1.5 py-[3px] text-[11px] font-medium leading-none ring-1 ring-inset whitespace-nowrap",
+        "inline-flex max-w-full items-center gap-1 truncate rounded-md px-1.5 py-[3px] text-[11px] font-medium leading-none ring-1 ring-inset whitespace-nowrap",
         PILL_TONES[tone],
         className,
       )}

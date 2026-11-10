@@ -61,7 +61,7 @@ export function CandidateCard({
       </div>
 
       <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-paper-100/80 px-2 py-1 md:gap-2 md:rounded-xl md:px-2.5 md:py-2">
-        <div className="flex items-baseline justify-between gap-1 md:block">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5 md:block">
           <div className="text-[10px] text-ink-400 md:text-[10.5px]">毛利率</div>
           <div
             className={cn(
@@ -76,13 +76,13 @@ export function CandidateCard({
             {pct(candidate.evaluation.daily.margin)}
           </div>
         </div>
-        <div className="flex items-baseline justify-between gap-1 md:block">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5 md:block">
           <div className="text-[10px] text-ink-400 md:text-[10.5px]">日均单量</div>
           <div className="tabular text-[12.5px] font-semibold text-ink-800 md:text-[15px]">
             {num(candidate.evaluation.daily.orders, 0)}
           </div>
         </div>
-        <div className="flex items-baseline justify-between gap-1 md:block">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5 md:block">
           <div className="text-[10px] text-ink-400 md:text-[10.5px]">单件净利</div>
           <div className="tabular text-[12.5px] font-semibold text-ink-800 md:text-[15px]">
             {money(candidate.evaluation.daily.netPerOrderCents)}
@@ -91,17 +91,17 @@ export function CandidateCard({
       </div>
 
       <div className="grid grid-cols-3 gap-1.5 text-[10.5px] md:flex md:flex-col md:gap-1.5 md:text-[11px]">
-        <div className="flex items-baseline justify-between gap-1 md:gap-2">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5 md:gap-2">
           <span className="text-ink-400">30 天利润</span>
           <span className="tabular font-display text-[12px] font-semibold text-ink-900 md:text-[17px]">
             {moneyInt(candidate.sim.p50Cents)}
           </span>
         </div>
-        <div className="flex items-baseline justify-between gap-1 md:gap-2">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5 md:gap-2">
           <span className="text-ink-400">最差 10%</span>
           <span className="tabular text-[11.5px] font-medium text-ink-600 md:text-[12.5px]">{moneyInt(candidate.sim.p10Cents)}</span>
         </div>
-        <div className="flex items-baseline justify-between gap-1 md:gap-2">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-1 gap-y-0.5 md:gap-2">
           <span className="text-ink-400">缺货天数</span>
           <span
             className={cn(
