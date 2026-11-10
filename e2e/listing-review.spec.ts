@@ -129,13 +129,55 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByText("掌柜已驳回").first()).toBeVisible();
   });
 
-  test("场景 2：定向修正后可选策略拍板通过，并回放已封存事件", async ({ page }) => {
+  test("场景 2：无链接证据诚实提取、390px 首屏可读可拍板、定向修正后通过并回放已封存事件", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
     await page.getByTestId("scenario-2").click();
     await page.getByTestId("run-button").click();
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
       timeout: 30_000,
     });
+
+    // Part A：无链接场景 2 证据诚实性（无子 agent 术语、商品名识别为护颈枕、无包装费伪价差）
+    await expect(page.getByTestId("live-ledger")).toContainText("未附商品链接，已从粘贴文字提取商品资料");
+    await expect(page.getByTestId("live-ledger")).toContainText("护颈枕");
+    await expect(page.getByTestId("live-ledger")).toContainText("按默认费率");
+    await expect(page.getByTestId("live-ledger")).toContainText("约 50 单/天（价格带日单量）");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("先把商品资料交给链接识别子 agent");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("这件商品叫什么");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("¥2.00 和 ¥89.00");
+
+    // Part B：390×844 awaiting-approval 首屏可读性（核心结论、未消解风险、拍板动作与策略选择均在 y <= 844 内，且横向 0 溢出）
+    await expect(page.getByText("七、等你拍板")).toHaveCount(0);
+    await expect(page.getByTestId("gate-unresolved-risks")).toContainText("30 天不缺货");
+    await expect(page.getByTestId("gate-unresolved-risks")).toContainText("推广占比");
+    const mobileMeasures = await page.evaluate(() => {
+      const rect = (sel: string) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { top: Math.round(r.top), bottom: Math.round(r.bottom) };
+      };
+      return {
+        overflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        threeStrategies: rect('[data-testid="three-strategies"]'),
+        risks: rect('[data-testid="gate-unresolved-risks"]'),
+        approve: rect('[data-testid="approve"]'),
+        reject: rect('[data-testid="reject"]'),
+        strategyMatch: rect('[data-testid="strategy-match"]'),
+      };
+    });
+    expect(mobileMeasures.overflowX).toBe(0);
+    expect(mobileMeasures.threeStrategies?.top).toBeLessThan(844);
+    expect(mobileMeasures.risks?.bottom).toBeLessThanOrEqual(844);
+    expect(mobileMeasures.approve?.bottom).toBeLessThanOrEqual(844);
+    expect(mobileMeasures.reject?.bottom).toBeLessThanOrEqual(844);
+    expect(mobileMeasures.strategyMatch?.bottom).toBeLessThanOrEqual(844);
+
+    // 页脚默认表面不再暴露 autoApprove 开发者兼容说明，展开凭证后可见
+    await expect(page.locator("footer > div").first()).not.toContainText("autoApprove");
+
+    await page.setViewportSize({ width: 1440, height: 900 });
     await expect(page.getByTestId("loop-comparison")).toContainText("已改 2 / 2 轮");
     await expect(page.getByTestId("loop-round-1")).toBeVisible();
     await expect(page.getByTestId("loop-round-2")).toBeVisible();
@@ -355,7 +397,7 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByTestId(`history-run-${runA.id}`)).toBeVisible();
     await expect(page.getByTestId(`history-run-${runB.id}`)).toBeVisible();
 
-    // 1) 流式等待期间点击历史卷宗：应立即切换到该历史卷宗并终止/忽略在途流，放行旧流后续帧也不会覆盖或混入事件
+    // 1) 流式等待期间历史按钮禁用并标明「会签进行中，完成后可查看历史」，防误触打断在途评审；完成后可正常切换历史
     await page.getByTestId("scenario-3").click();
     await page.evaluate(() => {
       const win = window as unknown as { __releaseSlowForHistory?: () => void };
@@ -396,13 +438,24 @@ test.describe("上架评审会签台", () => {
     await page.getByTestId("run-button").click();
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "running");
     await expect(page.getByTestId("live-ledger")).toContainText("纯棉短袖");
+    await expect(page.getByText("会签进行中，完成后可查看历史")).toBeVisible();
+    await expect(page.getByTestId(`history-run-${runA.id}`)).toBeDisabled();
 
-    await page.getByTestId(`history-run-${runA.id}`).click();
+    // 即使通过脚本强行触发点击，openRunFromHistory 守卫也不中断在途流
+    await page.evaluate((id: string) => {
+      const btn = document.querySelector(`[data-testid="history-run-${id}"]`) as HTMLButtonElement | null;
+      btn?.click();
+    }, runA.id);
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "running");
+
     await page.evaluate(() => {
       const win = window as unknown as { __releaseSlowForHistory?: () => void };
       win.__releaseSlowForHistory?.();
     });
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
+    await expect(page.getByTestId(`history-run-${runA.id}`)).toBeEnabled();
 
+    await page.getByTestId(`history-run-${runA.id}`).click();
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "completed");
     await expect(page.getByTestId("live-ledger")).toContainText("已封存历史卷宗");
     await expect(page.getByTestId("live-ledger")).toContainText("护颈,枕");
@@ -514,15 +567,22 @@ test.describe("上架评审会签台", () => {
     );
     expect(decisionCalls).toBe(1);
 
-    // 5) 拍板请求仍在途时切换到历史卷宗 runB：晚到的拍板响应不得把视图覆盖回刚才那条评审
-    await page.getByTestId(`history-run-${runB.id}`).click();
-    await expect(page.getByTestId("run-proof")).toContainText(`卷宗 ${runB.id}`);
+    // 5) 拍板请求仍在途时：历史按钮禁用并标明「拍板已送出，请稍候完成后再看历史记录」，避免后台已落库而界面误以为未提交
+    await expect(page.getByText("拍板已送出，请稍候完成后再看历史记录")).toBeVisible();
+    await expect(page.getByTestId(`history-run-${runB.id}`)).toBeDisabled();
+    await page.evaluate((id: string) => {
+      const btn = document.querySelector(`[data-testid="history-run-${id}"]`) as HTMLButtonElement | null;
+      btn?.click();
+    }, runB.id);
 
     await page.evaluate(() => {
       const win = window as unknown as { __releasePendingDecision?: () => void };
       win.__releasePendingDecision?.();
     });
 
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "completed");
+    await expect(page.getByTestId(`history-run-${runB.id}`)).toBeEnabled();
+    await page.getByTestId(`history-run-${runB.id}`).click();
     await expect(page.getByTestId("run-proof")).toContainText(`卷宗 ${runB.id}`);
     await expect(page.getByTestId("live-ledger")).toContainText("加厚收纳箱");
     await expect(page.getByRole("alert")).toHaveCount(0);

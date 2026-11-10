@@ -55,6 +55,16 @@ body {
   background: rgba(196, 68, 43, 0.22);
 }
 
+button:focus-visible,
+summary:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-seal-500);
+  outline-offset: 2px;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

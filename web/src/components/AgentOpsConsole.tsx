@@ -270,7 +270,7 @@ function CredentialLine({
   )?.score;
 
   return (
-    <details className="mt-2.5 border-t border-paper-200/80 pt-2">
+    <details className="mt-1 border-t border-paper-200/80 pt-1 sm:mt-2.5 sm:pt-2">
       <summary className="cursor-pointer select-none text-[11px] text-ink-400 hover:text-ink-600">
         查看凭证
       </summary>
@@ -649,7 +649,7 @@ export function AgentOpsConsole(): React.JSX.Element {
   }, [replayAnimating, run]);
 
   const startRun = async (): Promise<void> => {
-    if (busy) return;
+    if (busy || decisionBusy || decisionInFlightRef.current) return;
     const { opId, signal } = beginOperation();
     setBusy(true);
     setDecisionBusy(false);
@@ -699,14 +699,8 @@ export function AgentOpsConsole(): React.JSX.Element {
   };
 
   const openRunFromHistory = async (id: string): Promise<void> => {
+    if (busy || decisionBusy || decisionInFlightRef.current) return;
     const { opId, signal } = beginOperation();
-    if (busy) {
-      setBusy(false);
-      setRun(null);
-      setStreamEvents([]);
-      setSelectedCandidateId(null);
-    }
-    setDecisionBusy(false);
     setError(null);
     setReplayAnimating(false);
     setReplayCount(null);
@@ -807,27 +801,29 @@ export function AgentOpsConsole(): React.JSX.Element {
   const unit = run?.artifacts.unit ?? activeCandidate?.evaluation.unit ?? null;
   const breakEvenCents = run?.artifacts.breakEvenCents ?? activeCandidate?.evaluation.breakEvenCents ?? 0;
   const risk = run?.artifacts.risk ?? null;
+  const gateFailRows = risk?.rows.filter((row) => row.status === "fail") ?? [];
+  const gateWarnRows = risk?.rows.filter((row) => row.status === "warn") ?? [];
   const currentStatus: RunStatus | "idle" = busy ? "running" : (run?.status ?? "idle");
   const statusMeta = currentStatus === "idle" ? null : RUN_STATUS_META[currentStatus];
   const llmMeta = llmBadgeMeta(run?.llm ?? null, llm);
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[1560px] flex-col gap-4 px-3 py-4 text-ink-900 sm:px-6">
-      <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-paper-300 bg-paper-50 px-5 py-3.5 shadow-card">
-        <div className="flex items-center gap-3.5">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-seal-500/40 bg-seal-100/70 text-seal-600">
-            <BookOpenCheck className="h-5 w-5" />
+    <div className="mx-auto flex min-h-screen w-full max-w-[1560px] flex-col gap-2.5 px-3 py-2 text-ink-900 sm:gap-4 sm:px-6 sm:py-4">
+      <header className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-paper-300 bg-paper-50 px-3.5 py-2 shadow-card sm:gap-3 sm:px-5 sm:py-3.5">
+        <div className="flex items-center gap-2.5 sm:gap-3.5">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-seal-500/40 bg-seal-100/70 text-seal-600 sm:h-11 sm:w-11">
+            <BookOpenCheck className="h-4 w-4 sm:h-5 sm:w-5" />
           </div>
           <div>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="font-display text-[20px] font-semibold tracking-tight text-ink-900">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+              <h1 className="font-display text-[17px] font-semibold tracking-tight text-ink-900 sm:text-[20px]">
                 商品上架评审会签台
               </h1>
               <span
                 data-testid="status"
                 data-status={currentStatus}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11.5px] font-semibold ring-1 ring-inset",
+                  "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset sm:text-[11.5px]",
                   statusMeta === null
                     ? "bg-paper-150 text-ink-600 ring-ink-900/10"
                     : statusMeta.tone === "jade"
@@ -840,20 +836,20 @@ export function AgentOpsConsole(): React.JSX.Element {
                 {statusMeta === null ? "还没开始" : statusMeta.label}
               </span>
             </div>
-            <p className="mt-0.5 text-[12px] text-ink-500">
+            <p className="mt-0.5 hidden text-[12px] text-ink-500 sm:block">
               先算清成本，再比三套策略，改完由你拍板
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
           <span data-testid="llm-mode-badge">
             <Pill tone={llmMeta.tone}>{llmMeta.label}</Pill>
           </span>
           <button
             type="button"
             onClick={() => setSettingsOpen((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-paper-100 px-3 py-1.5 text-[12px] font-medium text-ink-700 ring-1 ring-inset ring-paper-300 transition-colors hover:bg-paper-150"
+            className="inline-flex items-center gap-1 rounded-xl bg-paper-100 px-2.5 py-1 text-[11.5px] font-medium text-ink-700 ring-1 ring-inset ring-paper-300 transition-colors hover:bg-paper-150 sm:gap-1.5 sm:px-3 sm:py-1.5 sm:text-[12px]"
           >
             <Settings2 className="h-3.5 w-3.5" />
             模型配置
@@ -868,7 +864,11 @@ export function AgentOpsConsole(): React.JSX.Element {
       <Panel>
         <PanelHead
           title="要评哪件商品"
-          desc="贴链接、文案和进货成本就行。要是推广超了或可能亏本，会先改一改再给你看。"
+          desc={
+            <span className="hidden sm:inline">
+              贴链接、文案和进货成本就行。要是推广超了或可能亏本，会先改一改再给你看。
+            </span>
+          }
           right={
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -878,7 +878,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                 data-auto-approve={String(!requireApproval)}
                 onClick={() => setRequireApproval((prev) => !prev)}
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-[12px] font-semibold ring-1 ring-inset transition-all",
+                  "inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-[11.5px] font-semibold ring-1 ring-inset transition-all sm:gap-2 sm:px-3 sm:py-1.5 sm:text-[12px]",
                   requireApproval
                     ? "bg-seal-100 text-seal-600 ring-seal-500/40"
                     : "bg-paper-100 text-ink-700 ring-paper-300 hover:bg-paper-150",
@@ -891,18 +891,18 @@ export function AgentOpsConsole(): React.JSX.Element {
           }
         />
 
-        <div className="flex flex-col gap-3 px-5 py-4">
+        <div className="flex flex-col gap-2 px-3.5 py-2 sm:gap-3 sm:px-5 sm:py-4">
           <textarea
             data-testid="task-box"
             value={task}
             onChange={(event) => setTask(event.target.value)}
-            rows={3}
-            className="w-full resize-y rounded-xl bg-paper-100/90 px-3.5 py-2.5 text-[13px] leading-relaxed text-ink-900 outline-none ring-1 ring-inset ring-paper-300 focus:bg-paper-50 focus:ring-2 focus:ring-seal-500/45"
+            rows={2}
+            className="w-full resize-y rounded-xl bg-paper-100/90 px-3 py-1.5 text-[12px] leading-snug text-ink-900 outline-none ring-1 ring-inset ring-paper-300 focus:bg-paper-50 focus:ring-2 focus:ring-seal-500/45 sm:px-3.5 sm:py-2.5 sm:text-[13px] sm:leading-relaxed"
             placeholder="贴商品链接或分享文案，写上采购价、包材、快递、目标毛利和能周转的资金…"
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-2.5">
-            <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-2.5">
+            <div className="grid w-full grid-cols-2 gap-1 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-1.5">
               {SCENARIO_PRESETS.map((preset, index) => (
                 <button
                   key={preset.id}
@@ -910,16 +910,16 @@ export function AgentOpsConsole(): React.JSX.Element {
                   data-testid={`scenario-${String(index + 1)}`}
                   onClick={() => setTask(preset.text)}
                   className={cn(
-                    "inline-flex flex-wrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] ring-1 ring-inset transition-colors",
+                    "inline-flex flex-nowrap items-center gap-1 overflow-hidden rounded-lg px-2 py-1 text-left text-[11px] ring-1 ring-inset transition-colors sm:flex-wrap sm:gap-1.5 sm:px-2.5 sm:py-1.5 sm:text-[11.5px]",
                     task === preset.text
                       ? "bg-ink-900 text-paper-50 ring-ink-900"
                       : "bg-paper-100 text-ink-700 ring-paper-300 hover:bg-paper-150",
                   )}
                 >
-                  <span className="font-medium whitespace-nowrap">{preset.label}</span>
+                  <span className="shrink-0 font-medium whitespace-nowrap">{preset.label}</span>
                   <span
                     className={cn(
-                      "rounded px-1.5 py-0.5 text-[10px] leading-tight",
+                      "truncate rounded px-1 py-0.5 text-[9.5px] leading-tight sm:px-1.5 sm:text-[10px]",
                       task === preset.text ? "bg-paper-50/15 text-paper-100" : "bg-paper-200 text-ink-600",
                     )}
                   >
@@ -929,13 +929,15 @@ export function AgentOpsConsole(): React.JSX.Element {
               ))}
             </div>
 
-            <div className="flex items-center gap-2.5">
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto sm:gap-2.5">
               <ActionButton
                 data-testid="run-button"
+                size="sm"
+                className="h-7 w-full text-[12px] sm:h-10 sm:w-auto sm:px-4 sm:text-[13.5px]"
                 onClick={() => {
                   void startRun();
                 }}
-                disabled={busy || task.trim().length < 8}
+                disabled={busy || decisionBusy || task.trim().length < 8}
               >
                 <Play className="h-3.5 w-3.5" />
                 {busy ? "会签核算中…" : "开始上架评审"}
@@ -946,7 +948,7 @@ export function AgentOpsConsole(): React.JSX.Element {
           {error === null ? null : (
             <div
               role="alert"
-              className="flex items-center gap-2 rounded-xl border border-seal-500/30 bg-seal-100/80 px-3.5 py-2.5 text-[12.5px] text-seal-600"
+              className="flex items-center gap-2 rounded-xl border border-seal-500/30 bg-seal-100/80 px-3 py-2 text-[12px] text-seal-600 sm:px-3.5 sm:py-2.5 sm:text-[12.5px]"
             >
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
@@ -955,8 +957,263 @@ export function AgentOpsConsole(): React.JSX.Element {
         </div>
       </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="flex min-w-0 flex-col gap-4">
+      <div className="grid gap-2.5 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="flex min-w-0 flex-col gap-2.5 sm:gap-4">
+          <Panel data-testid="three-strategies">
+            <PanelHead
+              title="三套策略，由你拍板"
+              desc={
+                <span className="hidden sm:inline">
+                  点一张卡片看现金流和成本；等你拍板时，选中的就是通过方案。
+                </span>
+              }
+              right={
+                activeCandidate === undefined ? null : (
+                  <Pill tone="seal">
+                    当前检视：{activeCandidate.label}（{money(activeCandidate.priceCents)}）
+                  </Pill>
+                )
+              }
+            />
+
+            <div className="flex flex-col gap-2 p-2.5 sm:gap-5 sm:p-5">
+              <div className="flex flex-col gap-1.5 rounded-2xl border-2 border-seal-500/35 bg-seal-100/30 px-2.5 py-2 sm:gap-2 sm:px-4 sm:py-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+                      <Gavel className="h-3.5 w-3.5 text-seal-600 sm:h-4 sm:w-4" />
+                      <span className="font-display text-[14px] font-semibold text-ink-900 sm:text-[15px]">
+                        请你拍板
+                      </span>
+                      {run === null ? (
+                        <Pill tone="plain">请先运行评审</Pill>
+                      ) : currentStatus === "running" ? (
+                        <Pill tone="ochre">会签进行中 · 暂不可拍板</Pill>
+                      ) : run.status === "awaiting-approval" ? (
+                        <Pill tone="seal">等待掌柜拍板</Pill>
+                      ) : run.status === "completed" ? (
+                        <Pill tone="jade">
+                          {run.gateDecision === "approve" ? "掌柜已拍板通过" : "演示自动放行已封存"}
+                        </Pill>
+                      ) : run.status === "rejected" ? (
+                        <Pill tone="seal">掌柜已驳回方案</Pill>
+                      ) : (
+                        <Pill tone="ochre">核算进行中</Pill>
+                      )}
+                      {run !== null && run.loops.length > 0 ? (
+                        <Pill tone="ochre">已改 {String(run.loops.length)} / 2 轮</Pill>
+                      ) : null}
+                      {breakEvenCents > 0 ? (
+                        <Pill tone="ink">保本红线 {money(breakEvenCents)}</Pill>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 text-[11px] leading-snug text-ink-600 sm:mt-1 sm:text-[12px] sm:leading-relaxed">
+                      {run === null
+                        ? "评审结束后，在这里选稳价、跟价或冲量，然后通过或驳回。"
+                        : currentStatus === "running"
+                          ? "三套报价与风控已出，可先检视下方方案；文案节点完成后解锁拍板。"
+                          : run.status === "awaiting-approval"
+                            ? `现在选的是「${strategyName(activeCandidateId)}」${activeCandidate ? `（售价 ${money(activeCandidate.priceCents)}，毛利 ${pct(activeCandidate.evaluation.daily.margin)}）` : ""}。通过后会按这个方案记下。`
+                            : run.status === "rejected"
+                              ? "这次方案已被驳回，不能再改决定。"
+                              : `已按「${strategyName(run.artifacts.chosenId)}」记下。`}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                    <ActionButton
+                      data-testid="approve"
+                      variant="jade"
+                      size="sm"
+                      className="h-7 px-2.5 text-[12px] sm:h-10 sm:px-4 sm:text-[13.5px]"
+                      disabled={busy || run?.status !== "awaiting-approval" || decisionBusy}
+                      onClick={() => {
+                        void handleDecision("approve");
+                      }}
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      {decisionBusy
+                        ? "提交中…"
+                        : currentStatus === "running"
+                          ? "暂不可拍板（待文案完成）"
+                          : run === null
+                            ? "暂不可拍板（未开始）"
+                            : run.status === "completed"
+                              ? "已拍板封存"
+                              : run.status === "rejected"
+                                ? "已驳回封存"
+                                : `拍板通过${activeCandidate ? `（${activeCandidate.label}）` : ""}`}
+                    </ActionButton>
+
+                    <ActionButton
+                      data-testid="reject"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 border border-seal-500/40 px-2.5 text-[12px] text-seal-600 hover:bg-seal-100/50 sm:h-10 sm:px-4 sm:text-[13.5px]"
+                      disabled={busy || run?.status !== "awaiting-approval" || decisionBusy}
+                      onClick={() => {
+                        void handleDecision("reject");
+                      }}
+                    >
+                      <XCircle className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      驳回上架方案
+                    </ActionButton>
+                  </div>
+                </div>
+
+                {gateFailRows.length > 0 || gateWarnRows.length > 0 ? (
+                  <div
+                    data-testid="gate-unresolved-risks"
+                    className="flex flex-col gap-0.5 rounded-xl border border-seal-500/30 bg-paper-50/90 px-2 py-1 text-[10.5px] leading-snug sm:gap-1 sm:px-2.5 sm:py-1.5 sm:text-[11.5px]"
+                  >
+                    {gateFailRows.map((row) => (
+                      <div
+                        key={`gate-fail-${row.id ?? row.title}`}
+                        className="flex flex-wrap items-center gap-1 text-ink-800 sm:gap-1.5"
+                      >
+                        <Pill tone="seal">需修正</Pill>
+                        <span className="font-semibold text-seal-600">{row.title}：</span>
+                        <span className="text-ink-700">{row.detail}</span>
+                      </div>
+                    ))}
+                    {gateWarnRows.map((row) => (
+                      <div
+                        key={`gate-warn-${row.id ?? row.title}`}
+                        className="flex flex-wrap items-center gap-1 text-ink-700 sm:gap-1.5"
+                      >
+                        <Pill tone="ochre">待确认</Pill>
+                        <span className="font-semibold text-ink-900">{row.title}：</span>
+                        <span className="text-ink-600">{row.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <CredentialLine events={visibleEvents} nodeId="approval" run={run} />
+              </div>
+
+              {candidates.length > 0 ? (
+                <div className="grid gap-2 md:grid-cols-3 md:gap-3.5">
+                  {candidates.map((candidate) => (
+                    <div key={candidate.id} data-testid={`strategy-${candidate.id}`}>
+                      <CandidateCard
+                        candidate={candidate}
+                        recommended={candidate.id === run?.artifacts.chosenId}
+                        selected={candidate.id === activeCandidateId}
+                        disabled={decisionBusy}
+                        onSelect={() => setSelectedCandidateId(candidate.id)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-paper-300 bg-paper-100/40 px-4 py-6 text-center text-[13px] text-ink-500 sm:py-8">
+                  点上面「开始上架评审」后，这里会给出稳价、跟价、冲量三套方案。
+                </div>
+              )}
+
+              {activeCandidate === undefined ? null : (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-display text-[14.5px] font-semibold text-ink-900">
+                          单件成本与净利拆解
+                        </div>
+                        <div className="text-[11.5px] text-ink-500">
+                          保本价 {money(activeCandidate.evaluation.breakEvenCents)} · 单件净利{" "}
+                          {money(activeCandidate.evaluation.daily.netPerOrderCents)} · 日均单量{" "}
+                          {num(activeCandidate.evaluation.daily.orders, 0)} 单
+                        </div>
+                      </div>
+                      <Pill tone="ink">成本会计 + 市场核算</Pill>
+                    </div>
+                    <CostBreakdown evaluation={activeCandidate.evaluation} />
+                  </div>
+
+                  <div className="rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-display text-[14.5px] font-semibold text-ink-900">
+                          30 天现金流
+                        </div>
+                        <div className="text-[11.5px] text-ink-500">
+                          一般情况 {moneyInt(activeCandidate.sim.p50Cents)} · 较差情况 {moneyInt(activeCandidate.sim.p10Cents)} · 最低现金 {moneyInt(activeCandidate.sim.minCashCents)}
+                        </div>
+                      </div>
+                      <Pill tone={activeCandidate.sim.stockoutDays === 0 ? "jade" : "ochre"}>
+                        缺货 {activeCandidate.sim.stockoutDays} 天
+                      </Pill>
+                    </div>
+                    <ProfitCurve sim={activeCandidate.sim} />
+                  </div>
+                </div>
+              )}
+
+              {activeCandidate !== undefined && run !== null ? (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-paper-300 bg-paper-50 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="font-display text-[14.5px] font-semibold text-ink-900">
+                        这套策略的风控
+                      </span>
+                      <span className="text-[11.5px] text-ink-500">{activeCandidate.verdict}</span>
+                    </div>
+                    <ChecksList rows={activeCandidate.checks} />
+                  </div>
+
+                  <div className="flex flex-col justify-between gap-3 rounded-2xl border border-paper-300 bg-paper-50 p-4">
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="font-display text-[14.5px] font-semibold text-ink-900">
+                          决议和报告
+                        </span>
+                        <Pill tone={statusMeta?.tone ?? "ink"}>
+                          {statusMeta?.label ?? run.status}
+                        </Pill>
+                      </div>
+
+                      {run.status === "rejected" ? (
+                        <div className="rounded-xl border border-seal-500/40 bg-seal-100/50 p-3.5 text-[12.5px] leading-relaxed text-seal-600">
+                          <div className="font-semibold">掌柜已驳回</div>
+                          <p className="mt-1">这件不上架，也不会生成通过报告。</p>
+                        </div>
+                      ) : currentStatus === "running" ? (
+                        <p className="text-[12.5px] leading-relaxed text-ink-500">
+                          会签还在进行中，等你拍板通过后才会生成并封存报告。
+                        </p>
+                      ) : run.artifacts.report.length > 0 ? (
+                        <ul className="space-y-1.5 text-[12px] leading-relaxed text-ink-700">
+                          {run.artifacts.report.map((line) => (
+                            <li key={line} className="rounded-lg bg-paper-100/70 px-3 py-1.5">
+                              {line}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-[12.5px] leading-relaxed text-ink-500">
+                          还在等你拍板。通过之后，这里会写下最终结论。
+                        </p>
+                      )}
+                    </div>
+
+                    {!busy && (run.status === "completed" || run.status === "rejected") ? (
+                      <SealStamp
+                        hash={run.fingerprint}
+                        at={run.createdAt}
+                        label={
+                          run.status === "rejected"
+                            ? "掌柜已驳回 · 已封存"
+                            : `掌柜已拍板 · ${strategyName(run.artifacts.chosenId)}`
+                        }
+                      />
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </Panel>
+
           <Panel data-testid="live-ledger">
             <PanelHead
               title={
@@ -1285,265 +1542,26 @@ export function AgentOpsConsole(): React.JSX.Element {
               <LoopComparisonSection run={run} visibleEvents={visibleEvents} />
 
               {run === null ? null : (
-                <div className="grid gap-3.5 lg:grid-cols-2">
-                  <div className="rounded-xl border border-paper-300 bg-paper-100/50 p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-display text-[14.5px] font-semibold text-ink-900">
-                        六、上架文案
-                      </span>
-                      <Pill tone={llmMeta.tone}>{llmMeta.label}</Pill>
-                    </div>
-                    {run.artifacts.copy?.titles[0] ? (
-                      <div className="mt-2 rounded-lg bg-paper-50 px-3 py-2 text-[12px] text-ink-800 ring-1 ring-inset ring-paper-200">
-                        <span className="text-ink-500">
-                          {currentStatus === "running"
-                            ? "规则初稿（文案节点完成后定稿）："
-                            : "主标题初稿："}
-                        </span>
-                        <span className="font-medium">{run.artifacts.copy.titles[0].text}</span>
-                      </div>
-                    ) : null}
-                    <CredentialLine events={visibleEvents} nodeId="copy" run={run} />
-                  </div>
-
-                  <div className="rounded-xl border border-paper-300 bg-paper-100/50 p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-display text-[14.5px] font-semibold text-ink-900">
-                        七、等你拍板
-                      </span>
-                      {statusMeta === null ? null : (
-                        <Pill tone={statusMeta.tone}>{statusMeta.label}</Pill>
-                      )}
-                    </div>
-                    <div className="mt-2 text-[12px] leading-relaxed text-ink-700">
-                      {currentStatus === "running" ? (
-                        <p className="text-ochre-500">
-                          前五步核算与风控已就绪，正在完成文案节点；进入「待掌柜拍板」后方可拍板。
-                        </p>
-                      ) : run.status === "awaiting-approval" ? (
-                        <p>核算好了，到你拍板。下面选一套策略，通过或驳回就行。</p>
-                      ) : run.status === "rejected" ? (
-                        <p className="text-seal-600">掌柜已驳回这次方案，不会生成上架报告。</p>
-                      ) : (
-                        <p className="text-jade-600">
-                          已按「{strategyName(run.artifacts.chosenId)}」通过。
-                        </p>
-                      )}
-                    </div>
-                    <CredentialLine events={visibleEvents} nodeId="approval" run={run} />
-                  </div>
-                </div>
-              )}
-            </div>
-          </Panel>
-
-          <Panel data-testid="three-strategies">
-            <PanelHead
-              title="三套策略，由你拍板"
-              desc="点一张卡片看现金流和成本；等你拍板时，选中的就是通过方案。"
-              right={
-                activeCandidate === undefined ? null : (
-                  <Pill tone="seal">
-                    当前检视：{activeCandidate.label}（{money(activeCandidate.priceCents)}）
-                  </Pill>
-                )
-              }
-            />
-
-            <div className="flex flex-col gap-5 p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-seal-500/35 bg-seal-100/30 px-4 py-3.5">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Gavel className="h-4 w-4 text-seal-600" />
-                    <span className="font-display text-[15px] font-semibold text-ink-900">
-                      请你拍板
+                <div className="rounded-xl border border-paper-300 bg-paper-100/50 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-display text-[14.5px] font-semibold text-ink-900">
+                      六、上架文案
                     </span>
-                    {run === null ? (
-                      <Pill tone="plain">请先运行评审</Pill>
-                    ) : currentStatus === "running" ? (
-                      <Pill tone="ochre">会签进行中 · 暂不可拍板</Pill>
-                    ) : run.status === "awaiting-approval" ? (
-                      <Pill tone="seal">等待掌柜拍板</Pill>
-                    ) : run.status === "completed" ? (
-                      <Pill tone="jade">
-                        {run.gateDecision === "approve" ? "掌柜已拍板通过" : "演示自动放行已封存"}
-                      </Pill>
-                    ) : run.status === "rejected" ? (
-                      <Pill tone="seal">掌柜已驳回方案</Pill>
-                    ) : (
-                      <Pill tone="ochre">核算进行中</Pill>
-                    )}
+                    <Pill tone={llmMeta.tone}>{llmMeta.label}</Pill>
                   </div>
-                  <p className="mt-1 text-[12px] leading-relaxed text-ink-600">
-                    {run === null
-                      ? "评审结束后，在这里选稳价、跟价或冲量，然后通过或驳回。"
-                      : currentStatus === "running"
-                        ? "三套报价与风控已出，可先检视下方方案；文案节点完成后解锁拍板。"
-                        : run.status === "awaiting-approval"
-                          ? `现在选的是「${strategyName(activeCandidateId)}」${activeCandidate ? `（售价 ${money(activeCandidate.priceCents)}，毛利 ${pct(activeCandidate.evaluation.daily.margin)}）` : ""}。通过后会按这个方案记下。`
-                          : run.status === "rejected"
-                            ? "这次方案已被驳回，不能再改决定。"
-                            : `已按「${strategyName(run.artifacts.chosenId)}」记下。`}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <ActionButton
-                    data-testid="approve"
-                    variant="jade"
-                    disabled={busy || run?.status !== "awaiting-approval" || decisionBusy}
-                    onClick={() => {
-                      void handleDecision("approve");
-                    }}
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    {decisionBusy
-                      ? "提交中…"
-                      : currentStatus === "running"
-                        ? "暂不可拍板（待文案完成）"
-                        : run === null
-                          ? "暂不可拍板（未开始）"
-                          : run.status === "completed"
-                            ? "已拍板封存"
-                            : run.status === "rejected"
-                              ? "已驳回封存"
-                              : `拍板通过${activeCandidate ? `（${activeCandidate.label}）` : ""}`}
-                  </ActionButton>
-
-                  <ActionButton
-                    data-testid="reject"
-                    variant="ghost"
-                    className="border border-seal-500/40 text-seal-600 hover:bg-seal-100/50"
-                    disabled={busy || run?.status !== "awaiting-approval" || decisionBusy}
-                    onClick={() => {
-                      void handleDecision("reject");
-                    }}
-                  >
-                    <XCircle className="h-4 w-4" />
-                    驳回上架方案
-                  </ActionButton>
-                </div>
-              </div>
-
-              {candidates.length > 0 ? (
-                <div className="grid gap-3.5 md:grid-cols-3">
-                  {candidates.map((candidate) => (
-                    <div key={candidate.id} data-testid={`strategy-${candidate.id}`}>
-                      <CandidateCard
-                        candidate={candidate}
-                        recommended={candidate.id === run?.artifacts.chosenId}
-                        selected={candidate.id === activeCandidateId}
-                        disabled={decisionBusy}
-                        onSelect={() => setSelectedCandidateId(candidate.id)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-xl border border-dashed border-paper-300 bg-paper-100/40 px-4 py-8 text-center text-[13px] text-ink-500">
-                  点上面「开始上架评审」后，这里会给出稳价、跟价、冲量三套方案。
-                </div>
-              )}
-
-              {activeCandidate === undefined ? null : (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <div>
-                        <div className="font-display text-[14.5px] font-semibold text-ink-900">
-                          单件成本与净利拆解
-                        </div>
-                        <div className="text-[11.5px] text-ink-500">
-                          保本价 {money(activeCandidate.evaluation.breakEvenCents)} · 单件净利{" "}
-                          {money(activeCandidate.evaluation.daily.netPerOrderCents)} · 日均单量{" "}
-                          {num(activeCandidate.evaluation.daily.orders, 0)} 单
-                        </div>
-                      </div>
-                      <Pill tone="ink">成本会计 + 市场核算</Pill>
-                    </div>
-                    <CostBreakdown evaluation={activeCandidate.evaluation} />
-                  </div>
-
-                  <div className="rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <div>
-                        <div className="font-display text-[14.5px] font-semibold text-ink-900">
-                          30 天现金流
-                        </div>
-                        <div className="text-[11.5px] text-ink-500">
-                          一般情况 {moneyInt(activeCandidate.sim.p50Cents)} · 较差情况 {moneyInt(activeCandidate.sim.p10Cents)} · 最低现金 {moneyInt(activeCandidate.sim.minCashCents)}
-                        </div>
-                      </div>
-                      <Pill tone={activeCandidate.sim.stockoutDays === 0 ? "jade" : "ochre"}>
-                        缺货 {activeCandidate.sim.stockoutDays} 天
-                      </Pill>
-                    </div>
-                    <ProfitCurve sim={activeCandidate.sim} />
-                  </div>
-                </div>
-              )}
-
-              {activeCandidate !== undefined && run !== null ? (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-paper-300 bg-paper-50 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <span className="font-display text-[14.5px] font-semibold text-ink-900">
-                        这套策略的风控
+                  {run.artifacts.copy?.titles[0] ? (
+                    <div className="mt-2 rounded-lg bg-paper-50 px-3 py-2 text-[12px] text-ink-800 ring-1 ring-inset ring-paper-200">
+                      <span className="text-ink-500">
+                        {currentStatus === "running"
+                          ? "规则初稿（文案节点完成后定稿）："
+                          : "主标题初稿："}
                       </span>
-                      <span className="text-[11.5px] text-ink-500">{activeCandidate.verdict}</span>
+                      <span className="font-medium">{run.artifacts.copy.titles[0].text}</span>
                     </div>
-                    <ChecksList rows={activeCandidate.checks} />
-                  </div>
-
-                  <div className="flex flex-col justify-between gap-3 rounded-2xl border border-paper-300 bg-paper-50 p-4">
-                    <div>
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="font-display text-[14.5px] font-semibold text-ink-900">
-                          决议和报告
-                        </span>
-                        <Pill tone={statusMeta?.tone ?? "ink"}>
-                          {statusMeta?.label ?? run.status}
-                        </Pill>
-                      </div>
-
-                      {run.status === "rejected" ? (
-                        <div className="rounded-xl border border-seal-500/40 bg-seal-100/50 p-3.5 text-[12.5px] leading-relaxed text-seal-600">
-                          <div className="font-semibold">掌柜已驳回</div>
-                          <p className="mt-1">这件不上架，也不会生成通过报告。</p>
-                        </div>
-                      ) : currentStatus === "running" ? (
-                        <p className="text-[12.5px] leading-relaxed text-ink-500">
-                          会签还在进行中，等你拍板通过后才会生成并封存报告。
-                        </p>
-                      ) : run.artifacts.report.length > 0 ? (
-                        <ul className="space-y-1.5 text-[12px] leading-relaxed text-ink-700">
-                          {run.artifacts.report.map((line) => (
-                            <li key={line} className="rounded-lg bg-paper-100/70 px-3 py-1.5">
-                              {line}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-[12.5px] leading-relaxed text-ink-500">
-                          还在等你拍板。通过之后，这里会写下最终结论。
-                        </p>
-                      )}
-                    </div>
-
-                    {!busy && (run.status === "completed" || run.status === "rejected") ? (
-                      <SealStamp
-                        hash={run.fingerprint}
-                        at={run.createdAt}
-                        label={
-                          run.status === "rejected"
-                            ? "掌柜已驳回 · 已封存"
-                            : `掌柜已拍板 · ${strategyName(run.artifacts.chosenId)}`
-                        }
-                      />
-                    ) : null}
-                  </div>
+                  ) : null}
+                  <CredentialLine events={visibleEvents} nodeId="copy" run={run} />
                 </div>
-              ) : null}
+              )}
             </div>
           </Panel>
 
@@ -1606,7 +1624,15 @@ export function AgentOpsConsole(): React.JSX.Element {
           <Panel>
             <PanelHead
               title="最近几次"
-              desc={runs.length === 0 ? "还没有记录" : "点开可以再看"}
+              desc={
+                decisionBusy
+                  ? "拍板已送出，请稍候完成后再看历史记录"
+                  : busy
+                    ? "会签进行中，完成后可查看历史"
+                    : runs.length === 0
+                      ? "还没有记录"
+                      : "点开可以再看"
+              }
               right={<FileSpreadsheet className="h-4 w-4 text-seal-500" />}
             />
             <div className="flex max-h-[240px] flex-col gap-1.5 overflow-auto px-3 py-2.5">
@@ -1620,11 +1646,12 @@ export function AgentOpsConsole(): React.JSX.Element {
                       key={item.id}
                       type="button"
                       data-testid={`history-run-${item.id}`}
+                      disabled={busy || decisionBusy}
                       onClick={() => {
                         void openRunFromHistory(item.id);
                       }}
                       className={cn(
-                        "rounded-xl border px-3 py-2 text-left transition-colors",
+                        "rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                         run?.id === item.id
                           ? "border-seal-500/50 bg-paper-100"
                           : "border-transparent bg-paper-100/50 hover:border-paper-300 hover:bg-paper-100",
@@ -1781,7 +1808,7 @@ export function AgentOpsConsole(): React.JSX.Element {
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <Layers3 className="h-3.5 w-3.5 shrink-0 text-ink-400" />
           <span>
-            同一输入会算出同一套保本价和策略；接了模型也只写文案，写坏了会标明是规则兜底。台面默认停在「需我拍板」（直调 API 未传 autoApprove 时默认 true 保持兼容）。
+            同一输入会算出同一套保本价和策略；接了模型也只写文案，写坏了会标明是规则兜底。台面默认停在「需我拍板」。
           </span>
         </div>
         <div className="flex items-center gap-3 font-mono text-[10.5px] text-ink-400">
@@ -1797,6 +1824,9 @@ export function AgentOpsConsole(): React.JSX.Element {
                   <span data-testid="run-fingerprint-full" className="select-all break-all text-ink-900">
                     {run.fingerprint}
                   </span>
+                </div>
+                <div className="mt-1 text-ink-400">
+                  接口兼容说明：直调 API 未传 autoApprove 时默认 true 保持兼容。
                 </div>
               </div>
             </details>

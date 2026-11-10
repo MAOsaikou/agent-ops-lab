@@ -28,11 +28,11 @@ export function PanelHead({
   readonly right?: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-paper-200/90 px-5 py-3.5">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-paper-200/90 px-3.5 py-2.5 sm:items-start sm:gap-3 sm:px-5 sm:py-3.5">
       <div className="min-w-0">
-        <div className="text-[15px] font-semibold tracking-tight text-ink-900">{title}</div>
+        <div className="text-[14.5px] font-semibold tracking-tight text-ink-900 sm:text-[15px]">{title}</div>
         {desc === undefined ? null : (
-          <div className="mt-0.5 text-[12.5px] leading-relaxed text-ink-500">{desc}</div>
+          <div className="mt-0.5 text-[12px] leading-snug text-ink-500 sm:text-[12.5px] sm:leading-relaxed">{desc}</div>
         )}
       </div>
       {right === undefined ? null : <div className="shrink-0">{right}</div>}
