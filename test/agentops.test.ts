@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { AGENTS, DEFAULT_WORKFLOW, resolveAgent } from "../src/templates/agentops/catalog.js";
-import { runAgentWorkflow } from "../src/templates/agentops/runner.js";
+import { resumeAgentWorkflow, runAgentWorkflow } from "../src/templates/agentops/runner.js";
 import type { AgentRun, RunEvent } from "../src/templates/agentops/types.js";
 
 const task = `分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。纯棉短袖，券后价 ¥39.90，已拼 10 万+ 件。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品主流价 39.90 元，日单量 50，目标毛利 25%，推广预算 30 元，可周转资金 300 元。`;
@@ -53,12 +53,46 @@ describe("AgentOps 商品评审工作流", () => {
       },
     );
     expect(accountSnapshot).not.toBeNull();
+    expect(accountSnapshot!.status).toBe("running");
     expect(accountSnapshot!.artifacts.unit?.totalCents).toBeGreaterThan(0);
     expect(accountSnapshot!.artifacts.breakEvenCents).toBeGreaterThan(0);
     expect(accountSnapshot!.artifacts.prices).toHaveLength(0);
     expect(run.status).toBe("awaiting-approval");
     expect(run.events.at(-1)?.type).toBe("gate.awaiting");
     expect(seenEvents).toHaveLength(run.events.length);
+  });
+
+  test("resumeAgentWorkflow 从 awaiting-approval 恢复并保持事件哈希链与调度状态连续", async () => {
+    const intermediateStatuses: { type: RunEvent["type"]; status: AgentRun["status"] }[] = [];
+    const paused = await runAgentWorkflow(
+      { id: "resume-run", taskText: task, autoApprove: false, createdAt: "2026-01-01T00:00:00.000Z" },
+      null,
+      (event, snapshot) => {
+        intermediateStatuses.push({ type: event.type, status: snapshot.status });
+      },
+    );
+    expect(paused.status).toBe("awaiting-approval");
+    expect(intermediateStatuses.slice(0, -1).every((item) => item.status === "running")).toBe(true);
+    expect(intermediateStatuses.at(-1)).toEqual({ type: "gate.awaiting", status: "awaiting-approval" });
+
+    const serialized = JSON.parse(JSON.stringify(paused)) as AgentRun;
+    const resumeStatuses: { type: RunEvent["type"]; status: AgentRun["status"] }[] = [];
+    const completed = await resumeAgentWorkflow(serialized, { action: "approve", candidateId: "volume" }, (event, snapshot) => {
+      resumeStatuses.push({ type: event.type, status: snapshot.status });
+    });
+    expect(completed.status).toBe("completed");
+    expect(completed.gateDecision).toBe("approve");
+    expect(completed.preferredCandidateId).toBe("volume");
+    expect(completed.artifacts.chosenId).toBe("volume");
+    expect(completed.artifacts.report.length).toBeGreaterThan(0);
+    expect(completed.events.some((event) => event.type === "gate.decided")).toBe(true);
+    expect(completed.events.at(-1)?.type).toBe("run.completed");
+    expect(resumeStatuses.slice(0, -1).every((item) => item.status === "running")).toBe(true);
+    expect(resumeStatuses.at(-1)).toEqual({ type: "run.completed", status: "completed" });
+    for (let index = 1; index < completed.events.length; index += 1) {
+      expect(completed.events[index]?.seq).toBe(index + 1);
+      expect(completed.events[index]?.prevHash).toBe(completed.events[index - 1]?.hash);
+    }
   });
 
   test("控制台场景 1 遇到证据边界失败时不会空转砍推广预算", async () => {

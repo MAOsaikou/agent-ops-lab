@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { AgentRun, RunSummary } from "../templates/agentops/types.js";
@@ -18,6 +18,19 @@ export type AgentRunStore = {
 export function openAgentRunStore(directory: string): AgentRunStore {
   mkdirSync(directory, { recursive: true });
   const items = new Map<string, AgentRun>();
+  for (const entry of readdirSync(directory)) {
+    if (!entry.endsWith(".json")) continue;
+    const id = entry.slice(0, -5);
+    if (!ID_PATTERN.test(id)) continue;
+    try {
+      const raw: unknown = JSON.parse(readFileSync(path.join(directory, entry), "utf8"));
+      if (typeof raw === "object" && raw !== null && "id" in raw && raw.id === id) {
+        items.set(id, raw as AgentRun);
+      }
+    } catch {
+      // Ignore malformed files on startup.
+    }
+  }
   return {
     save(run) {
       items.set(run.id, run);

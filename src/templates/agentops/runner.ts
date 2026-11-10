@@ -15,6 +15,7 @@ import { copyPrompt, validateCopy } from "./llm.js";
 import type {
   AgentRun,
   Artifacts,
+  GateDecisionInput,
   InternalState,
   LoopAction,
   LoopSnapshot,
@@ -135,6 +136,7 @@ function initialState(taskText: string, autoApprove: boolean): InternalState {
     taskText,
     autoApprove,
     gateDecision: null,
+    decidedCandidateId: null,
     targetMargin: 0.25,
     facts: null,
     product: null,
@@ -652,6 +654,83 @@ function artifacts(state: InternalState): Artifacts {
   };
 }
 
+function completeAfterApproval(
+  state: InternalState,
+  events: RunEvent[],
+  iteration: number,
+  setCompleted: () => void,
+  emit?: EmitEvent,
+): void {
+  executeReport(state, events, iteration, emit);
+  const finalAgent = dispatch(state, events, "final-check", "risk", "执行最终一致性验证", iteration, emit);
+  verify(state, events, "final", "evidence", "证据链存在", state.facts !== null ? "pass" : "warn", "研究 Agent 已输出字段证据", "final-check", finalAgent, emit);
+  verify(state, events, "final", "economics", "经济计算完整", state.unit !== null && state.breakEvenCents > 0 ? "pass" : "fail", "成本会计输出单件成本和保本价", "final-check", finalAgent, emit);
+  verify(state, events, "final", "feedback", "反馈回路可解释", state.loops.length > 0 ? "pass" : "warn", `本次运行记录 ${String(state.loops.length)} 轮反馈`, "final-check", finalAgent, emit);
+  setCompleted();
+  addEvent(events, "run.completed", "任务完成并封存", "所有 Agent 输出、工具调用、验证和反馈记录已进入事件链", "seal", "reporter", emit);
+}
+
+export class DecisionConflictError extends Error {
+  readonly code: "decision-conflict" | "run-not-awaiting-decision";
+  readonly status: AgentRun["status"];
+
+  constructor(code: "decision-conflict" | "run-not-awaiting-decision", status: AgentRun["status"], message: string) {
+    super(message);
+    this.name = "DecisionConflictError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function isSameDecision(run: AgentRun, decision: GateDecisionInput): boolean {
+  if (run.gateDecision === null || run.gateDecision !== decision.action) {
+    return false;
+  }
+  if (decision.action === "reject") {
+    return decision.candidateId === undefined || decision.candidateId === run.decidedCandidateId;
+  }
+  const previousCandidate = run.decidedCandidateId ?? run.artifacts.chosenId;
+  const requestedCandidate = decision.candidateId ?? previousCandidate;
+  return requestedCandidate === previousCandidate;
+}
+
+function restoreState(run: AgentRun): { readonly state: InternalState; readonly iteration: number } {
+  const sched = run.scheduler;
+  const product = run.artifacts.product;
+  const candidates = run.artifacts.candidates ? [...run.artifacts.candidates] : [];
+  const iteration = sched?.iteration ?? 1 + run.loops.length;
+  const state: InternalState = {
+    taskText: run.task.text,
+    autoApprove: run.task.autoApprove,
+    gateDecision: sched?.gateDecision ?? run.gateDecision ?? null,
+    decidedCandidateId: sched?.decidedCandidateId ?? run.decidedCandidateId ?? null,
+    targetMargin: product?.targetMargin ?? 0.25,
+    facts: sched?.facts ?? analyzeProductInput({ text: run.task.text }),
+    product,
+    unit: run.artifacts.unit,
+    breakEvenCents: run.artifacts.breakEvenCents,
+    candidates,
+    chosenId: run.artifacts.chosenId,
+    preferredCandidateId: sched?.preferredCandidateId ?? run.preferredCandidateId ?? null,
+    risk: run.artifacts.risk,
+    copy: run.artifacts.copy,
+    bullets: [...run.artifacts.bullets],
+    report: [...run.artifacts.report],
+    llm: run.llm,
+    assumptions: [...run.artifacts.assumptions],
+    verifications: [...run.verifications],
+    loops: [...run.loops],
+    adjustments: sched ? [...sched.adjustments] : [],
+    loads: { ...(sched?.loads ?? run.loads ?? {}) },
+    calls: { ...(sched?.calls ?? run.calls ?? {}) },
+    failures: { ...(sched?.failures ?? run.failures ?? {}) },
+    runs: { ...(sched?.runs ?? {}) },
+    dispatches: [...run.dispatches],
+    gateNeeded: run.status === "awaiting-approval",
+  };
+  return { state, iteration };
+}
+
 export async function runAgentWorkflow(
   input: { readonly id: string; readonly taskText: string; readonly autoApprove: boolean; readonly createdAt: string },
   live: LiveLlm | null = null,
@@ -659,12 +738,13 @@ export async function runAgentWorkflow(
 ): Promise<AgentRun> {
   const state = initialState(input.taskText, input.autoApprove);
   const events: RunEvent[] = [];
-  let status: AgentRun["status"] = "completed";
+  let status: AgentRun["status"] = "running";
+  let iteration = 1;
   const emit: EmitEvent | undefined =
     onEvent === undefined
       ? undefined
       : (event) => {
-          onEvent(event, finalize(input, state, [...events], status, state.llm));
+          onEvent(event, finalize(input, state, [...events], status, state.llm, iteration));
         };
 
   addEvent(events, "run.started", "任务开始", `工作流 ${DEFAULT_WORKFLOW.title} · 目标：${DEFAULT_WORKFLOW.intent}`, null, "planner", emit);
@@ -677,7 +757,6 @@ export async function runAgentWorkflow(
   executeMarket(state, events, 1, emit);
   let lastRiskVerdicts = executeRisk(state, events, 1, emit);
 
-  let iteration = 1;
   while (state.risk?.level === "fail" && iteration < 3) {
     const nextIteration = iteration + 1;
     const planned = planAdjustment(state, nextIteration);
@@ -711,18 +790,112 @@ export async function runAgentWorkflow(
   }
   addEvent(events, "gate.awaiting", "等待人工确认", "这是高风险动作的人工介入节点：请确认成本假设、未解析字段和推荐策略", "approval", "owner", emit);
   if (!input.autoApprove) {
-    return finalize(input, state, events, "awaiting-approval", llm);
+    return finalize(input, state, events, "awaiting-approval", llm, iteration);
   }
-  state.gateDecision = "approve";
   state.gateNeeded = false;
   addEvent(events, "gate.autoApproved", "演示模式自动通过人工门", "autoApprove=true；正式部署应由用户点击确认", "approval", "owner", emit);
-  executeReport(state, events, iteration, emit);
-  const finalAgent = dispatch(state, events, "final-check", "risk", "执行最终一致性验证", iteration, emit);
-  verify(state, events, "final", "evidence", "证据链存在", state.facts !== null ? "pass" : "warn", "研究 Agent 已输出字段证据", "final-check", finalAgent, emit);
-  verify(state, events, "final", "economics", "经济计算完整", state.unit !== null && state.breakEvenCents > 0 ? "pass" : "fail", "成本会计输出单件成本和保本价", "final-check", finalAgent, emit);
-  verify(state, events, "final", "feedback", "反馈回路可解释", state.loops.length > 0 ? "pass" : "warn", `本次运行记录 ${String(state.loops.length)} 轮反馈`, "final-check", finalAgent, emit);
-  addEvent(events, "run.completed", "任务完成并封存", "所有 Agent 输出、工具调用、验证和反馈记录已进入事件链", "seal", "reporter", emit);
-  return finalize(input, state, events, "completed", llm);
+  completeAfterApproval(
+    state,
+    events,
+    iteration,
+    () => {
+      status = "completed";
+    },
+    emit,
+  );
+  return finalize(input, state, events, "completed", llm, iteration);
+}
+
+export async function resumeAgentWorkflow(
+  run: AgentRun,
+  decision: GateDecisionInput,
+  onEvent?: RunEventListener,
+): Promise<AgentRun> {
+  if (run.status !== "awaiting-approval") {
+    if ((run.status === "completed" || run.status === "rejected") && isSameDecision(run, decision)) {
+      return run;
+    }
+    const code = run.gateDecision !== null ? "decision-conflict" : "run-not-awaiting-decision";
+    throw new DecisionConflictError(
+      code,
+      run.status,
+      code === "decision-conflict"
+        ? `该运行已封存人工决策（${run.gateDecision ?? "none"}），不能用冲突决策覆盖`
+        : `该运行当前状态为 ${run.status}，不在等待人工确认阶段`,
+    );
+  }
+
+  await Promise.resolve();
+  const { state, iteration } = restoreState(run);
+  const events: RunEvent[] = [...run.events];
+  const input = {
+    id: run.id,
+    taskText: run.task.text,
+    autoApprove: run.task.autoApprove,
+    createdAt: run.createdAt,
+  };
+  let status: AgentRun["status"] = "running";
+  const emit: EmitEvent | undefined =
+    onEvent === undefined
+      ? undefined
+      : (event) => {
+          onEvent(event, finalize(input, state, [...events], status, state.llm, iteration));
+        };
+
+  state.gateDecision = decision.action;
+  state.decidedCandidateId = decision.candidateId ?? null;
+  state.gateNeeded = false;
+
+  if (decision.action === "reject") {
+    state.report = [];
+    status = "rejected";
+    addEvent(
+      events,
+      "gate.decided",
+      "人工门驳回上架方案",
+      "action=reject；掌柜驳回当前评审方案，不生成通过报告并封存事件链",
+      "approval",
+      "owner",
+      emit,
+    );
+    return finalize(input, state, events, "rejected", state.llm, iteration);
+  }
+
+  const previousChosenId = state.chosenId;
+  if (
+    decision.candidateId !== undefined &&
+    state.candidates.some((candidate) => candidate.id === decision.candidateId)
+  ) {
+    state.preferredCandidateId = decision.candidateId;
+    state.chosenId = decision.candidateId;
+    const candidate = state.candidates.find((item) => item.id === decision.candidateId);
+    if (candidate !== undefined && decision.candidateId !== previousChosenId && state.product !== null && state.llm.mode !== "live") {
+      const preset = PLATFORM_PRESETS[state.product.platform];
+      state.copy = buildCopy(state.product, preset, candidate.priceCents, state.breakEvenCents);
+      state.bullets = candidate.bullets.map((bullet) => bullet.text);
+    }
+  }
+
+  const chosen = state.candidates.find((item) => item.id === state.chosenId) ?? state.candidates[0];
+  addEvent(
+    events,
+    "gate.decided",
+    "人工门确认通过",
+    `action=approve；选定策略：${chosen?.label ?? state.chosenId ?? "默认"}（${chosen === undefined ? "—" : money(chosen.priceCents)}）`,
+    "approval",
+    "owner",
+    emit,
+  );
+  completeAfterApproval(
+    state,
+    events,
+    iteration,
+    () => {
+      status = "completed";
+    },
+    emit,
+  );
+  return finalize(input, state, events, "completed", state.llm, iteration);
 }
 
 function finalize(
@@ -731,9 +904,14 @@ function finalize(
   events: readonly RunEvent[],
   status: AgentRun["status"],
   llm: AgentRun["llm"],
+  iteration: number = 1 + state.loops.length,
 ): AgentRun {
   const currentArtifacts = artifacts(state);
   const fingerprint = sha256Hex(canonicalJson({ workflow: DEFAULT_WORKFLOW, events, artifacts: currentArtifacts }));
+  const loads = { ...state.loads };
+  const calls = { ...state.calls };
+  const failures = { ...state.failures };
+  const runs = { ...state.runs };
   return {
     id: input.id,
     createdAt: input.createdAt,
@@ -741,10 +919,10 @@ function finalize(
     task: { text: input.taskText, autoApprove: input.autoApprove },
     workflow: DEFAULT_WORKFLOW,
     agents: AGENTS,
-    dispatches: state.dispatches,
+    dispatches: [...state.dispatches],
     events,
-    verifications: state.verifications,
-    loops: state.loops,
+    verifications: [...state.verifications],
+    loops: [...state.loops],
     artifacts: currentArtifacts,
     llm,
     fingerprint,
@@ -753,5 +931,23 @@ function finalize(
       "并行节点 account / market 由调度器分别选择 Agent；经济类风险失败最多触发 2 轮额外反馈循环（共最多 3 轮验证）。",
       "人工门在正式模式需要用户确认，autoApprove 仅用于可重复演示。",
     ],
+    gateDecision: state.gateDecision,
+    preferredCandidateId: state.preferredCandidateId,
+    decidedCandidateId: state.decidedCandidateId,
+    failures,
+    loads,
+    calls,
+    scheduler: {
+      loads,
+      calls,
+      failures,
+      runs,
+      preferredCandidateId: state.preferredCandidateId,
+      gateDecision: state.gateDecision,
+      decidedCandidateId: state.decidedCandidateId,
+      iteration,
+      adjustments: [...state.adjustments],
+      facts: state.facts,
+    },
   };
 }

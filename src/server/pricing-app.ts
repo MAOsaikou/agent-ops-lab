@@ -14,9 +14,11 @@ import { planCsv } from "./plan-csv.js";
 import type { PlanStore } from "./plans.js";
 import { analyzeProductInput } from "../templates/intake/agent.js";
 import { AGENTS, DEFAULT_WORKFLOW, TOOL_CATALOG, WORKFLOW_TEMPLATES } from "../templates/agentops/catalog.js";
-import { runAgentWorkflow } from "../templates/agentops/runner.js";
+import { DecisionConflictError, isSameDecision, resumeAgentWorkflow, runAgentWorkflow } from "../templates/agentops/runner.js";
+import type { AgentRun, RunEvent } from "../templates/agentops/types.js";
 import { memoryAgentRunStore, type AgentRunStore } from "./agent-runs.js";
 import { openLlmSettingsStore, type LlmSettingsStore } from "./llm-settings.js";
+import { SSE_HEADERS } from "./sse.js";
 
 const inputSchema = z.strictObject({
   platform: z.enum(PLATFORM_IDS),
@@ -52,11 +54,35 @@ const intakeSchema = z.strictObject({
   links: z.array(z.string().max(2_048)).max(10).optional(),
 });
 
+const runRequestSchema = z.strictObject({
+  task: z.string().min(8).max(20_000),
+  autoApprove: z.boolean().optional(),
+  id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/).optional(),
+  createdAt: z.string().min(1).max(64).optional(),
+});
+
+const decisionSchema = z.strictObject({
+  action: z.enum(["approve", "reject"]),
+  candidateId: z.enum(CANDIDATE_IDS).optional(),
+});
+
+function formatAgentOpsEvent(event: RunEvent): string {
+  return `id: ${String(event.seq)}\nevent: event\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function formatAgentOpsDone(run: AgentRun): string {
+  return `event: done\ndata: ${JSON.stringify(run)}\n\n`;
+}
+
 let counter = 0;
 
 function newPlanId(): string {
   counter = (counter + 1) % 1296;
   return `p${Date.now().toString(36)}${counter.toString(36).padStart(2, "0")}`;
+}
+
+function newRunId(): string {
+  return `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
 export type PricingAppOptions = {
@@ -71,6 +97,7 @@ export function createPricingApp(options: PricingAppOptions): Hono {
   const now = options.now ?? (() => new Date());
   const agentRuns = options.agentRuns ?? memoryAgentRunStore();
   const llmSettings = options.llmSettings ?? openLlmSettingsStore(null, process.env);
+  const inFlightDecisions = new Set<string>();
 
   app.use("*", async (c, next) => {
     await next();
@@ -121,20 +148,127 @@ export function createPricingApp(options: PricingAppOptions): Hono {
 
   app.post("/api/agentops/llm/test", async (c) => c.json(await llmSettings.test()));
 
+  const streamAgentRun = (input: {
+    readonly id: string;
+    readonly taskText: string;
+    readonly autoApprove: boolean;
+    readonly createdAt: string;
+  }): Response => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          const run = await runAgentWorkflow(input, llmSettings.resolve(), (event) => {
+            controller.enqueue(encoder.encode(formatAgentOpsEvent(event)));
+          });
+          agentRuns.save(run);
+          controller.enqueue(encoder.encode(formatAgentOpsDone(run)));
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "Agent run failed";
+          controller.enqueue(
+            encoder.encode(`event: error\ndata: ${JSON.stringify({ code: "run-failed", detail })}\n\n`),
+          );
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, { status: 200, headers: SSE_HEADERS });
+  };
+
+  app.post("/api/agentops/runs/stream", async (c) => {
+    const body: unknown = await c.req.json().catch(() => null);
+    const parsed = runRequestSchema.safeParse(body);
+    if (!parsed.success) return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
+    const id = parsed.data.id ?? newRunId();
+    const createdAt = parsed.data.createdAt ?? now().toISOString();
+    return streamAgentRun({
+      id,
+      taskText: parsed.data.task,
+      autoApprove: parsed.data.autoApprove ?? true,
+      createdAt,
+    });
+  });
+
   app.post("/api/agentops/runs", async (c) => {
     const body: unknown = await c.req.json().catch(() => null);
-    const parsed = z.strictObject({ task: z.string().min(8).max(20_000), autoApprove: z.boolean().optional() }).safeParse(body);
+    const parsed = runRequestSchema.safeParse(body);
     if (!parsed.success) return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
-    const id = `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const id = parsed.data.id ?? newRunId();
+    const createdAt = parsed.data.createdAt ?? now().toISOString();
+    const input = {
+      id,
+      taskText: parsed.data.task,
+      autoApprove: parsed.data.autoApprove ?? true,
+      createdAt,
+    };
+    if (c.req.header("accept")?.includes("text/event-stream") === true) {
+      return streamAgentRun(input);
+    }
     try {
-      const run = await runAgentWorkflow(
-        { id, taskText: parsed.data.task, autoApprove: parsed.data.autoApprove ?? true, createdAt: now().toISOString() },
-        llmSettings.resolve(),
-      );
+      const run = await runAgentWorkflow(input, llmSettings.resolve());
       agentRuns.save(run);
       return c.json(run, 201);
     } catch (error) {
       return c.json({ code: "run-failed", detail: error instanceof Error ? error.message : "Agent run failed" }, 422);
+    }
+  });
+
+  app.post("/api/agentops/runs/:id/decision", async (c) => {
+    const id = c.req.param("id");
+    if (inFlightDecisions.has(id)) {
+      return c.json(
+        {
+          code: "decision-in-progress",
+          id,
+          detail: "该运行正在处理另一项审批请求，请勿并发提交",
+        },
+        409,
+      );
+    }
+    const existing = agentRuns.load(id);
+    if (existing === undefined) {
+      return c.json({ code: "run-not-found", id }, 404);
+    }
+    inFlightDecisions.add(id);
+    try {
+      const body: unknown = await c.req.json().catch(() => null);
+      const parsed = decisionSchema.safeParse(body);
+      if (!parsed.success) {
+        return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
+      }
+      const current = agentRuns.load(id);
+      if (current === undefined) {
+        return c.json({ code: "run-not-found", id }, 404);
+      }
+      if (current.status !== "awaiting-approval") {
+        if ((current.status === "completed" || current.status === "rejected") && isSameDecision(current, parsed.data)) {
+          return c.json(current, 200);
+        }
+        const code = current.gateDecision !== null ? "decision-conflict" : "run-not-awaiting-decision";
+        return c.json(
+          {
+            code,
+            id,
+            status: current.status,
+            detail:
+              code === "decision-conflict"
+                ? "该运行已封存不同的人工决策，禁止覆盖"
+                : "该运行当前不在等待人工确认阶段",
+          },
+          409,
+        );
+      }
+      const updated = await resumeAgentWorkflow(current, parsed.data);
+      agentRuns.save(updated);
+      return c.json(updated, 200);
+    } catch (error) {
+      if (error instanceof DecisionConflictError) {
+        return c.json({ code: error.code, id, status: error.status, detail: error.message }, 409);
+      }
+      return c.json({ code: "decision-failed", detail: error instanceof Error ? error.message : "Decision failed" }, 422);
+    } finally {
+      inFlightDecisions.delete(id);
     }
   });
 

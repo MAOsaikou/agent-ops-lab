@@ -145,7 +145,27 @@ export type Artifacts = {
   readonly assumptions: readonly string[];
 };
 
-export type RunStatus = "completed" | "awaiting-approval";
+export type RunStatus = "running" | "awaiting-approval" | "completed" | "rejected";
+
+export type GateAction = "approve" | "reject";
+
+export type GateDecisionInput = {
+  readonly action: GateAction;
+  readonly candidateId?: CandidateId | undefined;
+};
+
+export type SchedulerState = {
+  readonly loads: Readonly<Record<string, number>>;
+  readonly calls: Readonly<Record<string, number>>;
+  readonly failures: Readonly<Record<string, number>>;
+  readonly runs: Readonly<Record<string, number>>;
+  readonly preferredCandidateId: CandidateId | null;
+  readonly gateDecision: GateAction | null;
+  readonly decidedCandidateId: CandidateId | null;
+  readonly iteration: number;
+  readonly adjustments: readonly string[];
+  readonly facts: import("../intake/types.js").IntakeResult | null;
+};
 
 export type LlmInfo = {
   readonly mode: "rule" | "live" | "fallback";
@@ -166,8 +186,17 @@ export type AgentRun = {
   readonly loops: readonly LoopIteration[];
   readonly artifacts: Artifacts;
   readonly llm: LlmInfo;
+  // When status is "completed" or "rejected", fingerprint seals { workflow, events, artifacts }.
+  // When status is "awaiting-approval" or "running", fingerprint reflects the current partial chain.
   readonly fingerprint: string;
   readonly notes: readonly string[];
+  readonly gateDecision: GateAction | null;
+  readonly preferredCandidateId: CandidateId | null;
+  readonly decidedCandidateId: CandidateId | null;
+  readonly failures: Readonly<Record<string, number>>;
+  readonly loads: Readonly<Record<string, number>>;
+  readonly calls: Readonly<Record<string, number>>;
+  readonly scheduler: SchedulerState;
 };
 
 export type RunEventListener = (event: RunEvent, snapshot: AgentRun) => void;
@@ -187,7 +216,8 @@ export type RunSummary = {
 export type InternalState = {
   readonly taskText: string;
   readonly autoApprove: boolean;
-  gateDecision: "approve" | "reject" | null;
+  gateDecision: GateAction | null;
+  decidedCandidateId: CandidateId | null;
   targetMargin: number;
   facts: import("../intake/types.js").IntakeResult | null;
   product: ProductInput | null;
