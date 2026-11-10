@@ -57,6 +57,12 @@ test.describe("上架评审会签台", () => {
     await expect(gate).toContainText("需我拍板");
     await expect(page.getByTestId("live-ledger")).toBeVisible();
     await expect(page.getByTestId("loop-comparison")).toBeVisible();
+    await expect(page.getByTestId("loop-comparison")).toContainText("待核算");
+    await expect(page.getByTestId("loop-comparison")).not.toContainText("还不用改");
+    await expect(page.getByTestId("scenario-1")).toContainText("缺货与证据待拍板");
+    await expect(page.getByTestId("scenario-1")).not.toContainText("不用改，等你拍板");
+    await expect(page.getByTestId("scenario-3")).toContainText("细节待确认");
+    await expect(page.getByTestId("scenario-3")).not.toContainText("改 1 轮就过关");
     await expect(page.getByTestId("three-strategies")).toBeVisible();
     await expect(page.getByTestId("task-box")).toBeVisible();
     await expect(page.getByTestId("run-button")).toBeVisible();
@@ -75,12 +81,34 @@ test.describe("上架评审会签台", () => {
     });
     await expect(page.getByTestId("live-ledger")).toContainText("商品证据与待确认项");
     await expect(page.getByTestId("break-even-price")).toBeVisible();
-    await expect(page.getByTestId("loop-comparison")).toContainText("不用改价或预算");
+    await expect(page.getByTestId("loop-comparison")).toContainText("不用改价或预算，但仍有风险需你拍板");
+    await expect(page.getByTestId("loop-comparison")).toContainText("30 天不缺货");
+    await expect(page.getByTestId("loop-comparison")).toContainText("证据边界清晰");
     await expect(page.getByTestId("strategy-profit")).toBeVisible();
     await expect(page.getByTestId("strategy-match")).toBeVisible();
     await expect(page.getByTestId("strategy-volume")).toBeVisible();
     await expect(page.locator("svg.recharts-surface").first()).toBeVisible();
     await expect(page.getByTestId("llm-mode-badge")).toContainText(/规则 Harness|模型已启用|模型回退/);
+
+    // 协作角色职责与工具按需展开可达
+    const roleCard = page.getByTestId("role-card-cost-accountant");
+    await roleCard.locator("summary").click();
+    await expect(roleCard).toContainText("核算单件总成本");
+    await expect(roleCard).toContainText("pricing.unit-cost");
+
+    // 评审过程标题对商家可读，展开详情可查事件类型、工具标识与哈希链
+    await expect(page.getByTestId("event-stream-panel")).toContainText("调用工具：拆解评审步骤与验收标准");
+    const firstEvent = page.getByTestId("event-item-1");
+    await firstEvent.locator("summary").click();
+    await expect(firstEvent).toContainText("run.started");
+    await expect(firstEvent).toContainText("00000000… →");
+
+    // 页脚可展开查看完整 64 位运行指纹
+    const runProof = page.getByTestId("run-proof");
+    await runProof.locator("summary").click();
+    const fullHash = await page.getByTestId("run-fingerprint-full").textContent();
+    expect(fullHash?.trim()).toMatch(/^[0-9a-f]{64}$/);
+
     await page.getByTestId("reject").click();
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "rejected", {
       timeout: 15_000,
@@ -108,7 +136,7 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByText("已拍板封存").first()).toBeVisible();
 
     await page.getByTestId("replay-sealed-button").click();
-    await expect(page.getByText("正在回放")).toBeVisible();
+    await expect(page.getByTestId("sealed-replay-status")).toContainText("已封存回放（非实时工作）");
   });
 });
 

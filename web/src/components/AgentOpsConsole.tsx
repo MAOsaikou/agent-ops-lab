@@ -107,19 +107,19 @@ const SCENARIO_PRESETS: readonly ScenarioPreset[] = [
   {
     id: "pdd-evidence-boundary",
     label: "拼多多短袖",
-    badge: "不用改，等你拍板",
+    badge: "不改价和预算 · 缺货与证据待拍板",
     text: "分析这个拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。分享文案：纯棉短袖女夏季宽松，券后 ¥39.90，已拼 10 万+，包邮、七天无理由。采购 16 元，包材 1.5 元，快递 6.5 元，目标毛利 25%，可周转资金 300 元。",
   },
   {
     id: "jd-pillow-2loops",
     label: "京东护颈枕",
-    badge: "会连改 2 轮预算",
+    badge: "连改 2 轮预算 · 备货仍待拍板",
     text: "评估护颈枕价格与现金流。京东价 ¥89，竞品日单量约 50，采购 18 元，包装 2 元，快递 7 元，平台费率按默认，目标毛利 30%，预算 500 元。",
   },
   {
     id: "pdd-ad-converge",
     label: "拼多多短袖 · 推广偏高",
-    badge: "改 1 轮就过关",
+    badge: "降 1 轮推广预算 · 细节待确认",
     text: "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：纯棉短袖，券后价 ¥39.90。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品主流价 39.90 元，日单量 15，目标毛利 25%，推广预算 220 元，可周转资金 5000 元。",
   },
   {
@@ -143,7 +143,59 @@ const AGENT_SHORT: Readonly<Record<string, string>> = {
   "risk-auditor": "风控审计",
   copywriter: "上架文案师",
   reporter: "研究报告师",
+  owner: "掌柜",
 };
+
+const TOOL_LABELS: Readonly<Record<string, string>> = {
+  "workflow.plan": "拆解评审步骤与验收标准",
+  "product.parse": "解析商品链接与分享文案",
+  "knowledge.search": "检索平台规则与费率知识库",
+  "pricing.unit-cost": "核算单件总成本",
+  "pricing.break-even": "测算保本底价",
+  "pricing.candidates": "测算稳价、跟价、冲量三套报价",
+  "pricing.simulate": "推演 30 天现金流与断货风险",
+  "pricing.verify": "逐项核验风控约束",
+  "copy.generate": "生成合规标题与卖点初稿",
+  "report.compile": "汇编最终会签报告",
+};
+
+function prettyToolName(toolId: string, catalog: AgentCatalog | null): string {
+  return (
+    TOOL_LABELS[toolId] ??
+    catalog?.tools.find((item) => item.name === toolId)?.title ??
+    toolId
+  );
+}
+
+function prettyEventTitle(
+  event: RunEvent,
+  catalog: AgentCatalog | null,
+): { readonly title: string; readonly rawToolId: string | null } {
+  if (event.type === "tool.called" && event.title.startsWith("工具调用：")) {
+    const rawToolId = event.title.slice("工具调用：".length).trim();
+    return {
+      title: `调用工具：${prettyToolName(rawToolId, catalog)}`,
+      rawToolId,
+    };
+  }
+  const loopMatch = /^进入第\s*(\d+)\s*轮\s*Self-Loop$/.exec(event.title);
+  if (loopMatch?.[1] !== undefined) {
+    const iter = Number(loopMatch[1]);
+    return {
+      title: `进入第 ${String(Math.max(1, iter - 1))} 次参数修正`,
+      rawToolId: null,
+    };
+  }
+  const friendlyTitles: Readonly<Record<string, string>> = {
+    "规划 Agent 提交执行图": "任务规划师提交评审路线",
+    "文案 Agent 提交候选内容": "上架文案师提交标题与卖点",
+    "报告 Agent 提交审计报告": "研究报告师提交会签报告",
+  };
+  return {
+    title: friendlyTitles[event.title] ?? event.title,
+    rawToolId: null,
+  };
+}
 
 function prettyRole(role: string): string {
   return role
@@ -229,8 +281,8 @@ function CredentialLine({
         {dispatches.length > 1 ? <span>累计调度 {dispatches.length} 次</span> : null}
         {lastEvent === undefined ? null : (
           <span>
-            事件 #{String(lastEvent.seq).padStart(2, "0")} · {shortHash(lastEvent.prevHash, 8)} →{" "}
-            {shortHash(lastEvent.hash, 8)}
+            事件 #{String(lastEvent.seq).padStart(2, "0")} ({lastEvent.type}) ·{" "}
+            {shortHash(lastEvent.prevHash, 8)} → {shortHash(lastEvent.hash, 8)}
           </span>
         )}
       </div>
@@ -250,6 +302,7 @@ function LoopComparisonSection({
     (event) => event.type === "loop.iteration" || event.type === "loop.adjusted",
   );
   const failRows = run?.artifacts.risk?.rows.filter((row) => row.status === "fail") ?? [];
+  const warnRows = run?.artifacts.risk?.rows.filter((row) => row.status === "warn") ?? [];
 
   return (
     <div
@@ -264,9 +317,31 @@ function LoopComparisonSection({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Pill tone={loops.length > 0 ? "ochre" : "ink"}>
-            {loops.length === 0 ? "还不用改" : `已改 ${String(loops.length)} / 2 轮`}
-          </Pill>
+          {run === null ? (
+            <Pill tone="ink">待核算</Pill>
+          ) : loops.length === 0 ? (
+            <>
+              <Pill tone="ink">未改价或预算</Pill>
+              {failRows.length > 0 ? (
+                <Pill tone="seal">剩 {String(failRows.length)} 项需拍板</Pill>
+              ) : warnRows.length > 0 ? (
+                <Pill tone="ochre">剩 {String(warnRows.length)} 项待确认</Pill>
+              ) : (
+                <Pill tone="jade">首轮全过</Pill>
+              )}
+            </>
+          ) : (
+            <>
+              <Pill tone="ochre">已改 {String(loops.length)} / 2 轮</Pill>
+              {failRows.length > 0 ? (
+                <Pill tone="seal">仍余 {String(failRows.length)} 项需拍板</Pill>
+              ) : warnRows.length > 0 ? (
+                <Pill tone="ochre">余 {String(warnRows.length)} 项待确认</Pill>
+              ) : (
+                <Pill tone="jade">已全部通过</Pill>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -278,14 +353,26 @@ function LoopComparisonSection({
         <div className="mt-2.5 rounded-lg border border-paper-300/80 bg-paper-50 px-3.5 py-3 text-[12.5px] leading-relaxed text-ink-700">
           {failRows.length > 0 ? (
             <div>
-              <div className="font-medium text-ink-900">不用改价或预算</div>
+              <div className="font-medium text-ink-900">不用改价或预算，但仍有风险需你拍板</div>
               <p className="mt-1 text-ink-600">
-                还没过的是「{failRows.map((row) => row.title).join("、")}」。这类问题削推广费解决不了，留给你拍板。
+                未通过项：「{failRows.map((row) => row.title).join("、")}」
+                {warnRows.length > 0
+                  ? `；待确认项：「${warnRows.map((row) => row.title).join("、")}」`
+                  : ""}
+                。这类证据或备货问题削推广费解决不了，留给你拍板。
+              </p>
+            </div>
+          ) : warnRows.length > 0 ? (
+            <div>
+              <div className="font-medium text-ink-900">不用改价或预算，仍需确认细节</div>
+              <p className="mt-1 text-ink-600">
+                保本价、毛利、推广占比和活动折扣已过红线；还有「
+                {warnRows.map((row) => row.title).join("、")}」需你核对后再拍板。
               </p>
             </div>
           ) : (
             <div>
-              <div className="font-medium text-jade-600">第一轮就过了，不用改</div>
+              <div className="font-medium text-jade-600">不用改价或预算，首轮全部通过</div>
               <p className="mt-1 text-ink-600">保本价、毛利、推广占比和活动折扣都已通过。</p>
             </div>
           )}
@@ -819,12 +906,12 @@ export function AgentOpsConsole(): React.JSX.Element {
                         className="inline-flex items-center gap-1.5 rounded-lg bg-paper-100 px-2.5 py-1 text-[11.5px] font-medium text-ink-700 ring-1 ring-inset ring-paper-300 hover:bg-paper-150"
                       >
                         <History className="h-3.5 w-3.5" />
-                        回放这次评审
+                        回放已封存记录
                       </button>
                     ) : (
                       <div className="flex items-center gap-1.5 rounded-lg bg-ochre-100 px-2.5 py-1 text-[11.5px] text-ochre-500 ring-1 ring-inset ring-ochre-500/30">
-                        <span className="font-medium">
-                          正在回放：{replayCount} / {run.events.length}
+                        <span data-testid="sealed-replay-status" className="font-medium">
+                          已封存回放（非实时工作）：{replayCount} / {run.events.length}
                         </span>
                         <button
                           type="button"
@@ -1460,13 +1547,15 @@ export function AgentOpsConsole(): React.JSX.Element {
             </div>
           </Panel>
 
-          <Panel>
+          <Panel data-testid="event-stream-panel">
             <PanelHead
               title="评审过程"
               desc={
                 visibleEvents.length === 0
                   ? "开始后会按完成顺序出现在这里"
-                  : `已记下 ${String(visibleEvents.length)} 步`
+                  : replayCount !== null
+                    ? `已封存回放（非实时工作） · ${String(visibleEvents.length)} / ${String(run?.events.length ?? visibleEvents.length)} 步`
+                    : `已记下 ${String(visibleEvents.length)} 步`
               }
               right={<Scale className="h-4 w-4 text-ink-500" />}
             />
@@ -1482,27 +1571,37 @@ export function AgentOpsConsole(): React.JSX.Element {
                         : (run?.agents.find((a) => a.id === event.agentId)?.name ??
                           catalog?.agents.find((a) => a.id === event.agentId)?.name ??
                           prettyRole(event.agentId));
+                    const { title: displayTitle, rawToolId } = prettyEventTitle(event, catalog);
                     return (
                       <li
                         key={event.seq}
+                        data-testid={`event-item-${String(event.seq)}`}
                         className="rounded-xl border border-paper-200 bg-paper-100/60 px-3 py-2"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-1">
                           <span className="text-[12px] font-semibold text-ink-900">
-                            {event.title}
+                            {displayTitle}
                           </span>
                           {agentName === null ? null : <Pill tone="ink">{agentName}</Pill>}
                         </div>
-                        {event.detail.trim().length === 0 ? null : (
-                          <details className="mt-1">
-                            <summary className="cursor-pointer select-none text-[11px] text-ink-400 hover:text-ink-600">
-                              详情
-                            </summary>
+                        <details className="mt-1">
+                          <summary className="cursor-pointer select-none text-[11px] text-ink-400 hover:text-ink-600">
+                            详情
+                          </summary>
+                          {event.detail.trim().length === 0 ? null : (
                             <p className="mt-1 text-[11px] leading-relaxed text-ink-600">
                               {event.detail}
                             </p>
-                          </details>
-                        )}
+                          )}
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10px] text-ink-400">
+                            <span>#{String(event.seq).padStart(2, "0")}</span>
+                            <span>{event.type}</span>
+                            {rawToolId === null ? null : <span>{rawToolId}</span>}
+                            <span>
+                              {shortHash(event.prevHash, 8)} → {shortHash(event.hash, 8)}
+                            </span>
+                          </div>
+                        </details>
                       </li>
                     );
                   })}
@@ -1511,10 +1610,10 @@ export function AgentOpsConsole(): React.JSX.Element {
             </div>
           </Panel>
 
-          <Panel>
+          <Panel data-testid="collaborators-panel">
             <PanelHead
               title="谁在协作"
-              desc={`${String((run?.agents ?? catalog?.agents ?? []).length)} 个角色`}
+              desc={`${String((run?.agents ?? catalog?.agents ?? []).length)} 个角色 · 点开看职责与工具`}
               right={<Bot className="h-4 w-4 text-ink-500" />}
             />
             <div className="flex flex-col gap-1.5 px-3.5 py-3">
@@ -1522,16 +1621,36 @@ export function AgentOpsConsole(): React.JSX.Element {
                 const calls = run?.calls[agent.id] ?? 0;
                 const fails = run?.failures[agent.id] ?? 0;
                 return (
-                  <div
+                  <details
                     key={agent.id}
-                    className="flex items-center justify-between gap-2 rounded-xl border border-paper-200/90 bg-paper-100/50 px-3 py-2"
+                    data-testid={`role-card-${agent.id}`}
+                    className="group rounded-xl border border-paper-200/90 bg-paper-100/50 px-3 py-2"
                   >
-                    <span className="text-[12px] font-semibold text-ink-900">{agent.name}</span>
-                    <div className="flex items-center gap-1">
-                      {calls > 0 ? <Pill tone="jade">做过 {calls} 次</Pill> : <Pill tone="plain">待命</Pill>}
-                      {fails > 0 ? <Pill tone="seal">未过 {fails} 次</Pill> : null}
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 select-none">
+                      <span className="text-[12px] font-semibold text-ink-900">{agent.name}</span>
+                      <div className="flex items-center gap-1">
+                        {calls > 0 ? <Pill tone="jade">做过 {calls} 次</Pill> : <Pill tone="plain">待命</Pill>}
+                        {fails > 0 ? <Pill tone="seal">未过 {fails} 次</Pill> : null}
+                        <span className="ml-1 text-[10.5px] text-ink-400 group-open:text-ink-600">
+                          职责
+                        </span>
+                      </div>
+                    </summary>
+                    <div className="mt-2 border-t border-paper-200/80 pt-1.5 text-[11px] leading-relaxed text-ink-600">
+                      <p>{agent.role}</p>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {agent.tools.map((tool) => (
+                          <span
+                            key={tool}
+                            className="inline-flex items-center gap-1 rounded bg-paper-200/75 px-1.5 py-0.5 text-[10px] text-ink-700"
+                          >
+                            <span>{prettyToolName(tool, catalog)}</span>
+                            <code className="font-mono text-[9.5px] text-ink-400">{tool}</code>
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  </details>
                 );
               })}
             </div>
@@ -1540,12 +1659,28 @@ export function AgentOpsConsole(): React.JSX.Element {
       </div>
 
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-paper-300/80 px-2 pt-3 text-[11px] leading-relaxed text-ink-500">
-        <div className="flex items-center gap-2">
-          <Layers3 className="h-3.5 w-3.5 text-ink-400" />
-          <span>同一输入会算出同一套保本价和策略。接了模型也只写文案，写坏了会标明是规则兜底。</span>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Layers3 className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+          <span>
+            同一输入会算出同一套保本价和策略；接了模型也只写文案，写坏了会标明是规则兜底。台面默认停在「需我拍板」（直调 API 未传 autoApprove 时默认 true 保持兼容）。
+          </span>
         </div>
         <div className="flex items-center gap-3 font-mono text-[10.5px] text-ink-400">
-          {run === null ? null : <span>{shortHash(run.fingerprint, 12)}</span>}
+          {run === null ? null : (
+            <details data-testid="run-proof" className="text-right">
+              <summary className="cursor-pointer select-none text-ink-500 hover:text-ink-800">
+                卷宗 {run.id} · 指纹 {shortHash(run.fingerprint, 12)} · 查看凭证
+              </summary>
+              <div className="mt-1 rounded-lg border border-paper-300 bg-paper-50 px-2.5 py-1.5 text-left font-mono text-[10px] text-ink-600">
+                <div>
+                  完整运行指纹：
+                  <span data-testid="run-fingerprint-full" className="select-all break-all text-ink-900">
+                    {run.fingerprint}
+                  </span>
+                </div>
+              </div>
+            </details>
+          )}
         </div>
       </footer>
     </div>
