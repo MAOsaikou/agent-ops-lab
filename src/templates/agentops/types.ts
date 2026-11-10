@@ -1,4 +1,4 @@
-import type { Candidate, PlanCopy, ProductInput, UnitCost } from "../pricing/model.js";
+import type { Candidate, CandidateId, PlanCopy, ProductInput, UnitCost } from "../pricing/model.js";
 
 export const CAPABILITIES = ["planning", "intake", "cost", "market", "risk", "copy", "report"] as const;
 
@@ -90,17 +90,36 @@ export type Verification = {
   readonly detail: string;
 };
 
+export type LoopAction = "ad-budget" | "promo-discount" | "switch-candidate";
+
+export type LoopSnapshot = {
+  readonly chosenId: string | null;
+  readonly priceCents: number;
+  readonly promoPriceCents: number;
+  readonly margin: number;
+  readonly p10Cents: number;
+  readonly adDailyBudgetCents: number;
+  readonly promoDiscount: number;
+  readonly stockoutDays: number;
+  readonly failTitles: readonly string[];
+};
+
 export type LoopIteration = {
   readonly role: string;
   readonly iteration: number;
   readonly verdicts: readonly Verification[];
   readonly adjustment: string | null;
+  readonly action?: LoopAction;
+  readonly before: LoopSnapshot;
+  readonly after: LoopSnapshot;
 };
 
 export type RiskRow = {
+  readonly id?: string;
   readonly title: string;
   readonly status: VerificationStatus;
   readonly detail: string;
+  readonly owner?: string;
 };
 
 export type PriceRow = {
@@ -116,6 +135,7 @@ export type Artifacts = {
   readonly product: ProductInput | null;
   readonly unit: UnitCost | null;
   readonly breakEvenCents: number;
+  readonly candidates?: readonly Candidate[];
   readonly prices: readonly PriceRow[];
   readonly chosenId: string | null;
   readonly risk: { readonly level: VerificationStatus; readonly rows: readonly RiskRow[] } | null;
@@ -150,6 +170,8 @@ export type AgentRun = {
   readonly notes: readonly string[];
 };
 
+export type RunEventListener = (event: RunEvent, snapshot: AgentRun) => void;
+
 export type RunSummary = {
   readonly id: string;
   readonly createdAt: string;
@@ -173,10 +195,12 @@ export type InternalState = {
   breakEvenCents: number;
   candidates: readonly Candidate[];
   chosenId: string | null;
+  preferredCandidateId: CandidateId | null;
   risk: { readonly level: VerificationStatus; readonly rows: readonly RiskRow[] } | null;
   copy: PlanCopy | null;
   bullets: readonly string[];
   report: string[];
+  llm: LlmInfo;
   readonly assumptions: string[];
   readonly verifications: Verification[];
   readonly loops: LoopIteration[];
