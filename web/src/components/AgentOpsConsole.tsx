@@ -258,6 +258,7 @@ function CredentialLine({
   readonly nodeId: string;
   readonly run: AgentRun | null;
 }): React.JSX.Element | null {
+  if (run === null) return null;
   const nodeEvents = events.filter((event) => event.nodeId === nodeId);
   if (nodeEvents.length === 0) return null;
   const lastEvent = nodeEvents.at(-1);
@@ -564,6 +565,24 @@ export function AgentOpsConsole(): React.JSX.Element {
   const [replayCount, setReplayCount] = useState<number | null>(null);
   const [replayAnimating, setReplayAnimating] = useState<boolean>(false);
   const rafRef = useRef<number | null>(null);
+  const opSeqRef = useRef<number>(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const decisionInFlightRef = useRef<boolean>(false);
+
+  const beginOperation = (): { readonly opId: number; readonly signal: AbortSignal } => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    opSeqRef.current += 1;
+    decisionInFlightRef.current = false;
+    return { opId: opSeqRef.current, signal: controller.signal };
+  };
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     void fetchAgentCatalog()
@@ -630,11 +649,15 @@ export function AgentOpsConsole(): React.JSX.Element {
   }, [replayAnimating, run]);
 
   const startRun = async (): Promise<void> => {
+    if (busy) return;
+    const { opId, signal } = beginOperation();
     setBusy(true);
+    setDecisionBusy(false);
     setError(null);
     setOpenedFromHistory(false);
     setReplayCount(null);
     setReplayAnimating(false);
+    setSelectedCandidateId(null);
     setStreamEvents([]);
     setRun(null);
 
@@ -643,40 +666,75 @@ export function AgentOpsConsole(): React.JSX.Element {
       const completedOrPaused = await streamAgentTask(
         { task, autoApprove },
         (incomingEvent) => {
+          if (opSeqRef.current !== opId) return;
           setStreamEvents((prev) => [...prev, incomingEvent]);
         },
         (snapshot) => {
+          if (opSeqRef.current !== opId) return;
           setRun(snapshot);
         },
+        signal,
       );
+      if (opSeqRef.current !== opId) return;
       setRun(completedOrPaused);
       setStreamEvents(completedOrPaused.events);
       const latestRuns = await fetchAgentRuns().catch(() => []);
-      setRuns(latestRuns);
+      if (opSeqRef.current === opId) {
+        setRuns(latestRuns);
+      }
     } catch (caught) {
+      if (opSeqRef.current !== opId) return;
       setRun(null);
+      setStreamEvents([]);
+      setSelectedCandidateId(null);
+      setOpenedFromHistory(false);
+      setReplayCount(null);
+      setReplayAnimating(false);
       setError(caught instanceof Error ? caught.message : "上架评审运行失败");
     } finally {
-      setBusy(false);
+      if (opSeqRef.current === opId) {
+        setBusy(false);
+      }
     }
   };
 
   const openRunFromHistory = async (id: string): Promise<void> => {
+    const { opId, signal } = beginOperation();
+    if (busy) {
+      setBusy(false);
+      setRun(null);
+      setStreamEvents([]);
+      setSelectedCandidateId(null);
+    }
+    setDecisionBusy(false);
     setError(null);
     setReplayAnimating(false);
     setReplayCount(null);
     try {
-      const loaded = await fetchAgentRun(id);
+      const loaded = await fetchAgentRun(id, { signal });
+      if (opSeqRef.current !== opId) return;
       setRun(loaded);
       setStreamEvents(loaded.events);
       setOpenedFromHistory(true);
     } catch (caught) {
+      if (opSeqRef.current !== opId || signal.aborted) return;
       setError(caught instanceof Error ? caught.message : "读取历史评审卷宗失败");
     }
   };
 
   const handleDecision = async (action: "approve" | "reject"): Promise<void> => {
-    if (busy || run === null || run.status !== "awaiting-approval") return;
+    if (
+      busy ||
+      decisionBusy ||
+      decisionInFlightRef.current ||
+      run === null ||
+      run.status !== "awaiting-approval"
+    ) {
+      return;
+    }
+    const targetRunId = run.id;
+    const { opId } = beginOperation();
+    decisionInFlightRef.current = true;
     setDecisionBusy(true);
     setError(null);
     try {
@@ -687,15 +745,22 @@ export function AgentOpsConsole(): React.JSX.Element {
           : undefined;
       const decisionInput =
         candidateId !== undefined ? { action, candidateId } : { action };
-      const updated = await submitRunDecision(run.id, decisionInput);
+      const updated = await submitRunDecision(targetRunId, decisionInput);
+      const latestRuns = await fetchAgentRuns().catch(() => null);
+      if (latestRuns !== null) {
+        setRuns(latestRuns);
+      }
+      if (opSeqRef.current !== opId) return;
       setRun(updated);
       setStreamEvents(updated.events);
-      const latestRuns = await fetchAgentRuns().catch(() => []);
-      setRuns(latestRuns);
     } catch (caught) {
+      if (opSeqRef.current !== opId) return;
       setError(caught instanceof Error ? caught.message : "提交掌柜拍板决策失败");
     } finally {
-      setDecisionBusy(false);
+      if (opSeqRef.current === opId) {
+        decisionInFlightRef.current = false;
+        setDecisionBusy(false);
+      }
     }
   };
 
@@ -712,7 +777,7 @@ export function AgentOpsConsole(): React.JSX.Element {
   };
 
   const visibleEvents: readonly RunEvent[] = useMemo(() => {
-    if (run === null) return streamEvents;
+    if (run === null) return busy ? streamEvents : [];
     if (replayCount !== null) {
       return run.events.slice(0, replayCount);
     }
@@ -1230,7 +1295,11 @@ export function AgentOpsConsole(): React.JSX.Element {
                     </div>
                     {run.artifacts.copy?.titles[0] ? (
                       <div className="mt-2 rounded-lg bg-paper-50 px-3 py-2 text-[12px] text-ink-800 ring-1 ring-inset ring-paper-200">
-                        <span className="text-ink-500">主标题初稿：</span>
+                        <span className="text-ink-500">
+                          {currentStatus === "running"
+                            ? "规则初稿（文案节点完成后定稿）："
+                            : "主标题初稿："}
+                        </span>
                         <span className="font-medium">{run.artifacts.copy.titles[0].text}</span>
                       </div>
                     ) : null}
@@ -1330,7 +1399,15 @@ export function AgentOpsConsole(): React.JSX.Element {
                     <CheckCircle2 className="h-4 w-4" />
                     {decisionBusy
                       ? "提交中…"
-                      : `拍板通过${activeCandidate ? `（${activeCandidate.label}）` : ""}`}
+                      : currentStatus === "running"
+                        ? "暂不可拍板（待文案完成）"
+                        : run === null
+                          ? "暂不可拍板（未开始）"
+                          : run.status === "completed"
+                            ? "已拍板封存"
+                            : run.status === "rejected"
+                              ? "已驳回封存"
+                              : `拍板通过${activeCandidate ? `（${activeCandidate.label}）` : ""}`}
                   </ActionButton>
 
                   <ActionButton
@@ -1496,7 +1573,9 @@ export function AgentOpsConsole(): React.JSX.Element {
                     />
                   ))}
                   <p className="mt-1 text-[11px] leading-relaxed text-ink-400">
-                    {run.llm.note}
+                    {currentStatus === "running"
+                      ? "当前先展示本地规则初稿；文案节点完成后更新最终标题与卖点。"
+                      : run.llm.note}
                   </p>
                 </div>
 

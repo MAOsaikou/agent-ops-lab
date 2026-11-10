@@ -63,6 +63,7 @@ export async function streamAgentTask(
   input: { readonly task: string; readonly autoApprove: boolean },
   onEvent?: (event: RunEvent) => void,
   onSnapshot?: (snapshot: AgentRun) => void,
+  signal?: AbortSignal,
 ): Promise<AgentRun> {
   const response = await fetch(`${BASE}/api/agentops/runs/stream`, {
     method: "POST",
@@ -71,6 +72,7 @@ export async function streamAgentTask(
       accept: "text/event-stream",
     },
     body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
   });
 
   if (!response.ok) {
@@ -84,6 +86,15 @@ export async function streamAgentTask(
   }
 
   const reader = response.body.getReader();
+  if (signal?.aborted) {
+    await reader.cancel().catch(() => undefined);
+    throw new DOMException("流式请求已取消", "AbortError");
+  }
+  const onAbort = (): void => {
+    void reader.cancel().catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
   const decoder = new TextDecoder();
   let buffer = "";
   let doneRun: AgentRun | null = null;
@@ -116,20 +127,31 @@ export async function streamAgentTask(
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      buffer += decoder.decode();
-      break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (signal?.aborted) {
+        throw new DOMException("流式请求已取消", "AbortError");
+      }
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        processBlock(block);
+        boundary = buffer.indexOf("\n\n");
+      }
     }
-    buffer += decoder.decode(value, { stream: true });
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      processBlock(block);
-      boundary = buffer.indexOf("\n\n");
-    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+
+  if (signal?.aborted) {
+    throw new DOMException("流式请求已取消", "AbortError");
   }
 
   if (buffer.trim().length > 0) {
@@ -155,8 +177,14 @@ export function submitRunDecision(
   });
 }
 
-export function fetchAgentRun(id: string): Promise<AgentRun> {
-  return request<AgentRun>(`/api/agentops/runs/${id}`);
+export function fetchAgentRun(
+  id: string,
+  options?: { readonly signal?: AbortSignal },
+): Promise<AgentRun> {
+  return request<AgentRun>(
+    `/api/agentops/runs/${id}`,
+    options?.signal === undefined ? undefined : { signal: options.signal },
+  );
 }
 
 export type LlmSettingsView = {

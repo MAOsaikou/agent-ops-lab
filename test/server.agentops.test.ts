@@ -589,6 +589,36 @@ describe("AgentOps stream and human decision gate API", () => {
       ).rejects.toThrow("模拟网络中断");
       expect(seenSnapshots2).toHaveLength(1);
       expect(seenSnapshots2[0]?.status).toBe("running");
+
+      // 3) AbortSignal cancellation mid-stream rejects immediately without waiting for done
+      const controller = new AbortController();
+      const encoder = new TextEncoder();
+      const seenSnapshots3: AgentRun[] = [];
+      globalThis.fetch = () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(streamController) {
+                streamController.enqueue(encoder.encode(upToSnapshot));
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "text/event-stream" },
+            },
+          ),
+        );
+      const pendingStream = streamAgentTask(
+        { task: TASK, autoApprove: false },
+        undefined,
+        (snap) => {
+          seenSnapshots3.push(snap);
+          controller.abort();
+        },
+        controller.signal,
+      );
+      await expect(pendingStream).rejects.toThrow("流式请求已取消");
+      expect(seenSnapshots3).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -75,7 +75,7 @@ export function Pill({
 const BUTTON_VARIANTS = {
   primary:
     "bg-seal-500 text-paper-50 shadow-[0_10px_24px_-14px_rgba(196,68,43,0.9)] hover:bg-seal-600 active:translate-y-px",
-  jade: "bg-jade-500 text-paper-50 shadow-[0_10px_24px_-14px_rgba(46,107,82,0.9)] hover:bg-jade-600 active:translate-y-px",
+  jade: "bg-jade-500 text-paper-50 shadow-[0_10px_24px_-14px_rgba(46,107,82,0.9)] hover:bg-jade-600 active:translate-y-px disabled:bg-paper-200 disabled:text-ink-400 disabled:shadow-none disabled:ring-1 disabled:ring-inset disabled:ring-paper-300 disabled:opacity-75",
   ghost:
     "bg-paper-50 text-ink-800 ring-1 ring-inset ring-paper-300 hover:bg-paper-100 active:translate-y-px",
   quiet: "bg-transparent text-ink-500 hover:bg-paper-150 hover:text-ink-800",

@@ -208,9 +208,11 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByTestId("loop-comparison")).toContainText("已改 1 / 2 轮");
     await expect(page.getByTestId("loop-round-1")).toBeVisible();
 
-    // 拍板门在 running 阶段必须禁用，且不出现封存回放或已拍板封存标识
+    // 拍板门在 running 阶段必须禁用，文案标明规则初稿，按钮标明暂不可拍板，且不出现封存回放或已拍板封存标识
     await expect(page.getByTestId("approve")).toBeDisabled();
+    await expect(page.getByTestId("approve")).toContainText("暂不可拍板（待文案完成）");
     await expect(page.getByTestId("reject")).toBeDisabled();
+    await expect(page.getByTestId("live-ledger")).toContainText("规则初稿（文案节点完成后定稿）：");
     await expect(page.getByTestId("replay-sealed-button")).toHaveCount(0);
     await expect(page.getByTestId("live-ledger")).not.toContainText("已拍板封存");
     await expect(page.getByTestId("three-strategies")).not.toContainText("已拍板封存");
@@ -224,6 +226,8 @@ test.describe("上架评审会签台", () => {
 
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
     await expect(page.getByTestId("approve")).toBeEnabled();
+    await expect(page.getByTestId("approve")).toContainText("拍板通过");
+    await expect(page.getByTestId("live-ledger")).toContainText("主标题初稿：");
     await expect(page.getByTestId("reject")).toBeEnabled();
   });
 
@@ -272,6 +276,10 @@ test.describe("上架评审会签台", () => {
     await page.getByTestId("run-button").click();
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "running");
     await expect(page.getByTestId("break-even-price")).toBeVisible();
+    await page.getByTestId("event-item-10").locator("summary").click();
+    const abortedHashText = (await page.getByTestId("event-hash-full-10").textContent()) ?? "";
+    const abortedHashMatch = /hash:\s*([0-9a-f]{64})/.exec(abortedHashText);
+    expect(abortedHashMatch?.[1]).toBeDefined();
 
     // 触发中途失败
     await page.evaluate(() => {
@@ -282,18 +290,242 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByRole("alert")).toContainText("模拟文案阶段网络中断");
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "idle");
     await expect(page.getByTestId("approve")).toBeDisabled();
+    await expect(page.getByTestId("approve")).toContainText("暂不可拍板（未开始）");
     await expect(page.getByTestId("reject")).toBeDisabled();
     await expect(page.getByTestId("live-ledger")).not.toContainText("已拍板封存");
     await expect(page.getByTestId("three-strategies")).not.toContainText("已拍板封存");
     await expect(page.getByTestId("run-button")).toBeEnabled();
 
-    // 掌柜可再次点击正常重跑并恢复
+    // 中断后卷宗、过程侧栏、凭证、候选策略选择、回放与底栏指纹必须全部清空归零
+    await expect(page.getByTestId("event-stream-panel")).toContainText("开始后会按完成顺序出现在这里");
+    await expect(page.getByTestId("event-stream-panel")).toContainText("还没有过程记录");
+    await expect(page.locator('[data-testid^="event-item-"]')).toHaveCount(0);
+    await expect(page.getByTestId("live-ledger").getByText("查看凭证")).toHaveCount(0);
+    await expect(page.getByTestId("three-strategies")).not.toContainText("当前检视：");
+    await expect(page.locator('[data-testid^="strategy-"]')).toHaveCount(0);
+    await expect(page.getByTestId("replay-sealed-button")).toHaveCount(0);
+    await expect(page.getByTestId("run-proof")).toHaveCount(0);
+
+    // 掌柜切换到不同官方预设（场景 2：京东护颈枕）重跑，断言事件、哈希、产物、凭证、选择与状态均只属于新评审
+    await page.getByTestId("scenario-2").click();
     await page.getByTestId("run-button").click();
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
       timeout: 30_000,
     });
     await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByTestId("live-ledger")).toContainText("护颈,枕");
+    await expect(page.getByTestId("live-ledger")).toContainText("¥89.00");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("纯棉,短袖,宽松");
+    await expect(page.getByTestId("loop-comparison")).toContainText("已改 2 / 2 轮");
+    await expect(page.getByTestId("three-strategies")).toContainText("当前检视：跟价 · 对齐竞品（¥89.90）");
     await expect(page.getByTestId("approve")).toBeEnabled();
+    await expect(page.getByTestId("approve")).toContainText("拍板通过（跟价 · 对齐竞品）");
+    const retryEvent1 = page.getByTestId("event-item-1");
+    await retryEvent1.locator("summary").click();
+    await expect(page.getByTestId("event-hash-full-1")).toContainText("prev: " + "0".repeat(64));
+    const retryEvent10 = page.getByTestId("event-item-10");
+    await retryEvent10.locator("summary").click();
+    await expect(page.getByTestId("event-hash-full-10")).not.toContainText(abortedHashMatch![1]!);
+  });
+
+  test("并发与交错点击防护：流式中点历史、历史连点竞态、历史读取中发起新评审、拍板中点历史、同帧双次拍板均不串台", async ({
+    page,
+    request,
+  }) => {
+    // 先通过 API 准备两条可区分的历史卷宗（场景 2 京东护颈枕 与 场景 4 加厚收纳箱）
+    const seedResA = await request.post(`${API}/api/agentops/runs`, {
+      data: {
+        task: "评估护颈枕价格与现金流。京东价 ¥89，竞品日单量约 50，采购 18 元，包装 2 元，快递 7 元，平台费率按默认，目标毛利 30%，预算 500 元。",
+        autoApprove: true,
+      },
+    });
+    expect(seedResA.ok()).toBeTruthy();
+    const runA = (await seedResA.json()) as { id: string; fingerprint: string };
+
+    const seedResB = await request.post(`${API}/api/agentops/runs`, {
+      data: {
+        task: "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：加厚收纳箱，售价 ¥38.90。采购价 25 元，包材 2 元，快递 6 元，竞品主流价 38.90 元，日单量 60，目标毛利 5%，推广预算 10 元，可周转资金 5000 元。",
+        autoApprove: true,
+      },
+    });
+    expect(seedResB.ok()).toBeTruthy();
+    const runB = (await seedResB.json()) as { id: string; fingerprint: string };
+
+    await page.goto("/");
+    await expect(page.getByTestId(`history-run-${runA.id}`)).toBeVisible();
+    await expect(page.getByTestId(`history-run-${runB.id}`)).toBeVisible();
+
+    // 1) 流式等待期间点击历史卷宗：应立即切换到该历史卷宗并终止/忽略在途流，放行旧流后续帧也不会覆盖或混入事件
+    await page.getByTestId("scenario-3").click();
+    await page.evaluate(() => {
+      const win = window as unknown as { __releaseSlowForHistory?: () => void };
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.endsWith("/api/agentops/runs/stream")) {
+          return origFetch(input, init);
+        }
+        window.fetch = origFetch;
+        const realRes = await origFetch(input, init);
+        const fullText = await realRes.text();
+        const snapIdx = fullText.indexOf("event: snapshot");
+        const snapEnd = fullText.indexOf("\n\n", snapIdx);
+        const firstHalf = fullText.slice(0, snapEnd + 2);
+        const secondHalf = fullText.slice(snapEnd + 2);
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(firstHalf));
+            win.__releaseSlowForHistory = () => {
+              try {
+                controller.enqueue(encoder.encode(secondHalf));
+                controller.close();
+              } catch {
+                // 已被流取消则忽略
+              }
+            };
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      };
+    });
+
+    await page.getByTestId("run-button").click();
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "running");
+    await expect(page.getByTestId("live-ledger")).toContainText("纯棉短袖");
+
+    await page.getByTestId(`history-run-${runA.id}`).click();
+    await page.evaluate(() => {
+      const win = window as unknown as { __releaseSlowForHistory?: () => void };
+      win.__releaseSlowForHistory?.();
+    });
+
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "completed");
+    await expect(page.getByTestId("live-ledger")).toContainText("已封存历史卷宗");
+    await expect(page.getByTestId("live-ledger")).toContainText("护颈,枕");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("纯棉短袖");
+    await expect(page.getByTestId("run-proof")).toContainText(`卷宗 ${runA.id}`);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    // 2) 快速连点两条历史记录（runB 慢返回、runA 快返回）：先点 runB 再点 runA，晚到的 runB 响应不得覆盖 runA
+    await page.evaluate((slowRunId: string) => {
+      const win = window as unknown as { __releaseSlowHistoryFetch?: () => void };
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.endsWith(`/api/agentops/runs/${slowRunId}`)) {
+          return origFetch(input, init);
+        }
+        window.fetch = origFetch;
+        const realRes = await origFetch(input, init);
+        await new Promise<void>((resolve) => {
+          win.__releaseSlowHistoryFetch = resolve;
+        });
+        return realRes;
+      };
+    }, runB.id);
+
+    await page.getByTestId(`history-run-${runB.id}`).click();
+    await page.getByTestId(`history-run-${runA.id}`).click();
+    await expect(page.getByTestId("run-proof")).toContainText(`卷宗 ${runA.id}`);
+
+    await page.evaluate(() => {
+      const win = window as unknown as { __releaseSlowHistoryFetch?: () => void };
+      win.__releaseSlowHistoryFetch?.();
+    });
+    await expect(page.getByTestId("run-proof")).toContainText(`卷宗 ${runA.id}`);
+    await expect(page.getByTestId("live-ledger")).toContainText("护颈,枕");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("加厚收纳箱");
+
+    // 3) 历史卷宗处于封存回放或历史读取仍在途时直接点击「开始上架评审」：必须清空回放与历史标记，晚到的历史响应也不得覆盖新评审
+    await page.getByTestId("replay-sealed-button").click();
+    await expect(page.getByTestId("sealed-replay-status")).toBeVisible();
+
+    await page.evaluate((slowRunId: string) => {
+      const win = window as unknown as { __releaseHistoryBeforeNewRun?: () => void };
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.endsWith(`/api/agentops/runs/${slowRunId}`)) {
+          return origFetch(input, init);
+        }
+        window.fetch = origFetch;
+        const realRes = await origFetch(input, init);
+        await new Promise<void>((resolve) => {
+          win.__releaseHistoryBeforeNewRun = resolve;
+        });
+        return realRes;
+      };
+    }, runB.id);
+
+    await page.getByTestId(`history-run-${runB.id}`).click();
+    await page.getByTestId("scenario-1").click();
+    await page.getByTestId("run-button").click();
+    await page.evaluate(() => {
+      const win = window as unknown as { __releaseHistoryBeforeNewRun?: () => void };
+      win.__releaseHistoryBeforeNewRun?.();
+    });
+
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("sealed-replay-status")).toHaveCount(0);
+    await expect(page.getByTestId("live-ledger")).toContainText("纯棉,短袖,宽松");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("加厚收纳箱");
+    await expect(page.getByTestId("live-ledger")).not.toContainText("已封存历史卷宗");
+
+    // 4) 同帧连续触发两次拍板点击（模拟极速双击）：只发一次决策请求，不因并发 409 弹出错误警告
+    let decisionCalls = 0;
+    await page.evaluate(() => {
+      const win = window as unknown as {
+        __decisionCount?: number;
+        __releasePendingDecision?: () => void;
+      };
+      win.__decisionCount = 0;
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes("/api/agentops/runs/") || !url.endsWith("/decision")) {
+          return origFetch(input, init);
+        }
+        win.__decisionCount = (win.__decisionCount ?? 0) + 1;
+        const realRes = await origFetch(input, init);
+        if (win.__decisionCount === 1) {
+          await new Promise<void>((resolve) => {
+            win.__releasePendingDecision = resolve;
+          });
+          window.fetch = origFetch;
+        }
+        return realRes;
+      };
+    });
+
+    await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="approve"]') as HTMLButtonElement | null;
+      btn?.click();
+      btn?.click();
+    });
+
+    decisionCalls = await page.evaluate(
+      () => (window as unknown as { __decisionCount?: number }).__decisionCount ?? 0,
+    );
+    expect(decisionCalls).toBe(1);
+
+    // 5) 拍板请求仍在途时切换到历史卷宗 runB：晚到的拍板响应不得把视图覆盖回刚才那条评审
+    await page.getByTestId(`history-run-${runB.id}`).click();
+    await expect(page.getByTestId("run-proof")).toContainText(`卷宗 ${runB.id}`);
+
+    await page.evaluate(() => {
+      const win = window as unknown as { __releasePendingDecision?: () => void };
+      win.__releasePendingDecision?.();
+    });
+
+    await expect(page.getByTestId("run-proof")).toContainText(`卷宗 ${runB.id}`);
+    await expect(page.getByTestId("live-ledger")).toContainText("加厚收纳箱");
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 });
 
