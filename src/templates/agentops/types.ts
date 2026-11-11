@@ -1,6 +1,6 @@
 import type { Candidate, CandidateId, PlanCopy, ProductInput, UnitCost } from "../pricing/model.js";
 
-export const CAPABILITIES = ["planning", "intake", "cost", "market", "risk", "copy", "report"] as const;
+export const CAPABILITIES = ["planning", "intake", "cost", "market", "risk", "copy", "report", "procure", "price", "promote"] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -131,6 +131,39 @@ export type PriceRow = {
   readonly profitP10Cents: number;
 };
 
+export type CollabRole = "procurement-lead" | "pricing-lead" | "growth-operator";
+
+export type CollabProposal = {
+  readonly role: CollabRole;
+  readonly roleName: string;
+  readonly candidateId: CandidateId;
+  readonly candidateLabel: string;
+  readonly metricName: string;
+  readonly metricValue: string;
+  readonly rationale: string;
+};
+
+export type CollabObjection = {
+  readonly challenger: CollabRole;
+  readonly challengerName: string;
+  readonly targetCandidateId: CandidateId;
+  readonly checkId: string;
+  readonly title: string;
+  readonly status: VerificationStatus;
+  readonly detail: string;
+};
+
+export type CollaborationArtifact = {
+  readonly mode: "rule";
+  readonly originalRecommendedId: CandidateId;
+  readonly adjudicatedId: CandidateId;
+  readonly changed: boolean;
+  readonly summary: string;
+  readonly proposals: readonly CollabProposal[];
+  readonly objections: readonly CollabObjection[];
+  readonly leftoverRisks: readonly RiskRow[];
+};
+
 export type Artifacts = {
   readonly product: ProductInput | null;
   readonly unit: UnitCost | null;
@@ -143,6 +176,7 @@ export type Artifacts = {
   readonly bullets: readonly string[];
   readonly report: readonly string[];
   readonly assumptions: readonly string[];
+  readonly collaboration?: CollaborationArtifact | undefined;
 };
 
 export type RunStatus = "running" | "awaiting-approval" | "completed" | "rejected";
@@ -214,6 +248,7 @@ export type RunSummary = {
 };
 
 export type InternalState = {
+  readonly agents: readonly AgentSpec[];
   readonly taskText: string;
   readonly autoApprove: boolean;
   gateDecision: GateAction | null;
@@ -230,6 +265,7 @@ export type InternalState = {
   copy: PlanCopy | null;
   bullets: readonly string[];
   report: string[];
+  collaboration?: CollaborationArtifact | undefined;
   llm: LlmInfo;
   readonly assumptions: string[];
   readonly verifications: Verification[];

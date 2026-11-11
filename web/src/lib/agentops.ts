@@ -1,3 +1,4 @@
+import { parseStoredRun } from "../../../src/templates/agentops/stored-run.js";
 import type {
   AgentRun,
   GateDecisionInput,
@@ -177,14 +178,57 @@ export function submitRunDecision(
   });
 }
 
-export function fetchAgentRun(
+export async function fetchAgentRun(
   id: string,
   options?: { readonly signal?: AbortSignal },
 ): Promise<AgentRun> {
-  return request<AgentRun>(
-    `/api/agentops/runs/${id}`,
-    options?.signal === undefined ? undefined : { signal: options.signal },
-  );
+  let response: Response;
+  try {
+    response = await fetch(
+      `${BASE}/api/agentops/runs/${id}`,
+      options?.signal === undefined ? undefined : { signal: options.signal },
+    );
+  } catch (err) {
+    if (options?.signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+      throw new Error("连不上后端服务（请求被中止）");
+    }
+    throw new Error("连不上后端服务，请检查网络或后端状态");
+  }
+
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    throw new Error("连不上后端服务");
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error("无法打开这份卷宗：返回内容不是有效的 JSON");
+  }
+
+  if (body === null || typeof body !== "object") {
+    throw new Error("无法打开这份卷宗：返回内容为空或格式错误");
+  }
+
+  if (!response.ok) {
+    const detail = (body as { detail?: string } | null)?.detail;
+    if (response.status === 404) {
+      throw new Error(detail ?? "找不到这份评审卷宗");
+    }
+    if (response.status === 422) {
+      throw new Error(detail ?? "卷宗文件已损坏");
+    }
+    throw new Error(detail ?? `无法打开这份卷宗（HTTP ${response.status}）`);
+  }
+
+  const parsed = parseStoredRun(body);
+  if (!parsed.ok) {
+    throw new Error(`无法打开这份卷宗：${parsed.reason}`);
+  }
+  return parsed.run;
 }
 
 export type LlmSettingsView = {

@@ -26,7 +26,7 @@ export function CandidateCard({
       disabled={disabled && !selected}
       onClick={onSelect}
       className={cn(
-        "group relative flex h-full w-full flex-col gap-1 rounded-xl border px-2.5 py-1.5 text-left transition-all duration-200 md:gap-3 md:rounded-2xl md:p-4",
+        "group relative flex h-full w-full flex-col gap-0.5 rounded-xl border px-2 py-1 text-left transition-all duration-200 md:gap-3 md:rounded-2xl md:p-4",
         selected
           ? "border-seal-500 bg-paper-50 shadow-lift ring-1 ring-seal-500/30"
           : "border-paper-300/80 bg-paper-50/70 hover:-translate-y-0.5 hover:border-paper-400 hover:shadow-card",

@@ -16,7 +16,17 @@ describe("AgentOps 商品评审工作流", () => {
   test("执行多 Agent、并行分析、人工门、交叉验证和封存", async () => {
     const run = await runAgentWorkflow({ id: "test-run", taskText: task, autoApprove: true, createdAt: "2026-01-01T00:00:00.000Z" });
     expect(run.status).toBe("completed");
-    expect(run.agents).toHaveLength(7);
+    expect(run.agents).toHaveLength(10);
+    expect(run.workflow.id).toBe("product-launch-review.v2");
+
+    const v1Run = await runAgentWorkflow(
+      { id: "test-run-v1", taskText: task, autoApprove: true, createdAt: "2026-01-01T00:00:00.000Z" },
+      null,
+      undefined,
+      { collaboration: false },
+    );
+    expect(v1Run.agents).toHaveLength(7);
+    expect(v1Run.workflow.id).toBe("product-launch-review");
     expect(new Set(run.dispatches.map((dispatch) => dispatch.chosen)).size).toBeGreaterThanOrEqual(5);
     expect(run.events.some((event) => event.type === "tool.called")).toBe(true);
     expect(run.events.some((event) => event.type === "verify.checked")).toBe(true);
@@ -121,12 +131,17 @@ describe("AgentOps 商品评审工作流", () => {
   test("真实推广占比冲突触发定向 Self-Loop、记录前后快照并拉低责任 Agent 下轮调度分", async () => {
     const adConflictTask =
       "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：纯棉短袖，券后价 ¥39.90。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品主流价 39.90 元，日单量 15，目标毛利 25%，推广预算 220 元，可周转资金 5000 元。";
-    const run = await runAgentWorkflow({
-      id: "ad-conflict",
-      taskText: adConflictTask,
-      autoApprove: true,
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
+    const run = await runAgentWorkflow(
+      {
+        id: "ad-conflict",
+        taskText: adConflictTask,
+        autoApprove: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      null,
+      undefined,
+      { collaboration: false },
+    );
     expect(run.loops.length).toBeGreaterThanOrEqual(1);
     expect(run.loops.length).toBeLessThanOrEqual(2);
     const firstLoop = run.loops[0]!;
@@ -169,12 +184,17 @@ describe("AgentOps 商品评审工作流", () => {
 
     const switchCandidateTask =
       "评估京东商品是否值得上架：https://item.jd.com/100012345678.html。商品名：便携保温杯，京东价 ¥58.90，日单量 50，采购价 16 元，包材 1.5 元，快递 6.5 元，目标毛利 56%，推广预算 10 元，可周转资金 2200 元。";
-    const switchRun = await runAgentWorkflow({
-      id: "switch-conflict",
-      taskText: switchCandidateTask,
-      autoApprove: true,
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
+    const switchRun = await runAgentWorkflow(
+      {
+        id: "switch-conflict",
+        taskText: switchCandidateTask,
+        autoApprove: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      null,
+      undefined,
+      { collaboration: false },
+    );
     expect(switchRun.loops).toHaveLength(1);
     expect(switchRun.loops[0]?.action).toBe("switch-candidate");
     expect(switchRun.loops[0]?.before.chosenId).toBe("match");

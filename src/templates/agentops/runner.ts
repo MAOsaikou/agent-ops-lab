@@ -2,6 +2,7 @@ import { sha256Hex } from "../../engine/hash.js";
 import { parseRunId } from "../../engine/ids.js";
 import { canonicalJson } from "../../engine/json.js";
 import { analyzeProductInput } from "../intake/agent.js";
+import type { IntakeQuestion } from "../intake/types.js";
 import { buildCandidates, checksFor, draftCandidates } from "../pricing/candidates.js";
 import { buildCopy } from "../pricing/copy.js";
 import { breakEvenCents, nicePrice, unitCost } from "../pricing/economics.js";
@@ -9,11 +10,14 @@ import type { Candidate, CandidateId, ProductInput } from "../pricing/model.js";
 import { normalizeInput, recommendId } from "../pricing/plan.js";
 import { PLATFORM_PRESETS } from "../pricing/platform.js";
 import { simulate } from "../pricing/simulate.js";
-import { AGENTS, DEFAULT_WORKFLOW, resolveAgent } from "./catalog.js";
+import { AGENTS, AGENTS_V1, COLLAB_WORKFLOW, DEFAULT_WORKFLOW, resolveAgent } from "./catalog.js";
+import { runCollaboration } from "./collaboration.js";
+import { parseTaskFacts } from "./task-facts.js";
 import type { LiveLlm } from "./llm.js";
 import { copyPrompt, validateCopy } from "./llm.js";
 import type {
   AgentRun,
+  AgentSpec,
   Artifacts,
   GateDecisionInput,
   InternalState,
@@ -24,6 +28,7 @@ import type {
   RunEventListener,
   Verification,
   VerificationStatus,
+  WorkflowDocument,
 } from "./types.js";
 
 const ZERO_HASH = "0".repeat(64);
@@ -45,59 +50,6 @@ function pct(value: number): string {
 function clamp(value: number, low: number, high: number): number {
   if (!Number.isFinite(value)) return low;
   return Math.min(high, Math.max(low, value));
-}
-
-type TaskFacts = {
-  readonly buyCents: number | null;
-  readonly packagingCents: number | null;
-  readonly shippingCents: number | null;
-  readonly adDailyBudgetCents: number | null;
-  readonly cashCents: number | null;
-  readonly competitorCents: number | null;
-  readonly marketOrders: number | null;
-  readonly targetMargin: number | null;
-  readonly promoDiscount: number | null;
-};
-
-function yuanOf(text: string, pattern: RegExp): number | null {
-  const match = pattern.exec(text);
-  const raw = match?.[1];
-  if (raw === undefined) return null;
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) return null;
-  return Math.round(value * 100);
-}
-
-function parsePromoDiscount(text: string): number | null {
-  const zhe = /(?:活动|秒杀|促销|大促)\s*折扣?\s*[:：]?\s*(\d(?:\.\d)?)\s*折/.exec(text);
-  if (zhe?.[1] !== undefined) {
-    const value = Number(zhe[1]) / 10;
-    return value >= 0.4 && value <= 0.99 ? Number(value.toFixed(2)) : null;
-  }
-  const pctMatch = /(?:活动|秒杀|促销|大促)\s*折扣\s*[:：]?\s*(\d{2})\s*%/.exec(text);
-  if (pctMatch?.[1] !== undefined) {
-    const value = Number(pctMatch[1]) / 100;
-    return value >= 0.4 && value <= 0.99 ? Number(value.toFixed(2)) : null;
-  }
-  return null;
-}
-
-function parseTaskFacts(text: string): TaskFacts {
-  const marginMatch = /(?:目标\s*毛利|毛利(?:率)?|利润率)\s*[:：]?\s*(\d{1,2}(?:\.\d)?)\s*%/i.exec(text);
-  const orderMatch = /(?:竞品\s*)?(?:日单量|日销|日均|每天)\s*[:：]?\s*约?\s*(\d{1,6})/.exec(text);
-  const marginValue = marginMatch?.[1] === undefined ? null : Number(marginMatch[1]) / 100;
-  const orderValue = orderMatch?.[1] === undefined ? null : Number(orderMatch[1]);
-  return {
-    buyCents: yuanOf(text, /(?:采购价?|进货价?|拿货价?)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/),
-    packagingCents: yuanOf(text, /(?:包材|包装)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/),
-    shippingCents: yuanOf(text, /(?:快递|运费|物流)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/),
-    adDailyBudgetCents: yuanOf(text, /(?:推广预算|日预算|投放预算|预算)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/),
-    cashCents: yuanOf(text, /(?:可周转资金|周转金|备货资金)\s*[:：]?\s*(\d{1,7}(?:\.\d{1,2})?)\s*元/),
-    competitorCents: yuanOf(text, /(?:竞品(?:主流)?价|京东价|售价)\s*[:：]?\s*[¥￥]?\s*(\d{1,6}(?:\.\d{1,2})?)/),
-    marketOrders: orderValue !== null && Number.isFinite(orderValue) ? orderValue : null,
-    targetMargin: marginValue !== null && marginValue >= 0.02 && marginValue <= 0.6 ? marginValue : null,
-    promoDiscount: parsePromoDiscount(text),
-  };
 }
 
 function defaultProduct(text: string, facts: ReturnType<typeof analyzeProductInput>["patch"]): ProductInput {
@@ -131,8 +83,13 @@ function defaultProduct(text: string, facts: ReturnType<typeof analyzeProductInp
   };
 }
 
-function initialState(taskText: string, autoApprove: boolean): InternalState {
+function initialState(
+  taskText: string,
+  autoApprove: boolean,
+  agents: readonly AgentSpec[] = AGENTS,
+): InternalState {
   return {
+    agents,
     taskText,
     autoApprove,
     gateDecision: null,
@@ -203,7 +160,7 @@ function dispatch(
   iteration: number,
   emit?: EmitEvent,
 ): string {
-  const selected = resolveAgent(capability, state.loads, state.failures, state.calls);
+  const selected = resolveAgent(capability, state.loads, state.failures, state.calls, state.agents);
   const chosen = selected.agent;
   const candidates = selected.scores.map(({ agent, score }) => ({
     agentId: agent.id,
@@ -250,6 +207,43 @@ function executeResearch(state: InternalState, events: RunEvent[], iteration: nu
   addEvent(events, "node.output", "商品研究员提交证据包", `${state.facts.headline}；${String(state.facts.questions.length)} 个字段进入待确认，不把短链猜成商品详情`, "research", agent, emit);
   const base = defaultProduct(state.taskText, state.facts.patch);
   const given = parseTaskFacts(state.taskText);
+
+  const extraQuestions: IntakeQuestion[] = [];
+  if (given.buyCents === null && !state.facts.questions.some((q) => q.id === "ask-buy")) {
+    extraQuestions.push({
+      id: "ask-buy",
+      ask: "采购价（进货成本）是多少元？",
+      why: "未提供采购价，目前按演示值计算，会直接影响保本价与毛利核算。",
+      options: [],
+    });
+  }
+  if (given.shippingCents === null && !state.facts.questions.some((q) => q.id === "ask-shipping")) {
+    extraQuestions.push({
+      id: "ask-shipping",
+      ask: "单件快递运费是多少元？",
+      why: "未提供快递运费，目前按演示值计算，会直接影响每单履约成本。",
+      options: [],
+    });
+  }
+  if (
+    given.marketOrders === null &&
+    (state.facts.salesHint === null || state.facts.salesHint === undefined) &&
+    state.facts.patch.marketOrders === undefined &&
+    !state.facts.questions.some((q) => q.id === "ask-orders")
+  ) {
+    extraQuestions.push({
+      id: "ask-orders",
+      ask: "预估或同类商品日单量大约多少？",
+      why: "未提供单量且无公开销量证据，目前按默认单量推演 30 天现金流。",
+      options: [],
+    });
+  }
+  if (extraQuestions.length > 0) {
+    state.facts = {
+      ...state.facts,
+      questions: [...state.facts.questions, ...extraQuestions],
+    };
+  }
   const product: ProductInput = normalizeInput({
     ...base,
     buyCents: given.buyCents ?? base.buyCents,
@@ -329,6 +323,64 @@ function ownerForCheck(checkId: string): string {
   return "market-analyst";
 }
 
+function executeChallenge(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
+  const agent = dispatch(state, events, "challenge", "risk", "三方质询与会签交叉复核", iteration, emit);
+  if (state.product === null || state.candidates.length === 0) {
+    return;
+  }
+  const originalRecommendedId = (state.chosenId as CandidateId) ?? "match";
+  const collab = runCollaboration(state.product, state.candidates, originalRecommendedId);
+  runTool(
+    events,
+    "challenge",
+    "pricing.simulate",
+    agent,
+    "采购负责人、定价参谋与推广运营各自带入利益人透镜核算候选方案",
+    emit,
+  );
+  runTool(
+    events,
+    "challenge",
+    "pricing.verify",
+    agent,
+    "对各方提议方案进行交叉质询与反向压力测试",
+    emit,
+  );
+  for (const proposal of collab.proposals) {
+    addEvent(
+      events,
+      "node.output",
+      `会签提议：${proposal.roleName}`,
+      `提议「${proposal.candidateLabel}」：${proposal.rationale}（${proposal.metricName}：${proposal.metricValue}）`,
+      "challenge",
+      proposal.role,
+      emit,
+    );
+  }
+  addEvent(
+    events,
+    "node.output",
+    "三方交叉质询记录",
+    `共提出 ${String(collab.objections.length)} 项质询意见，其中 ${String(collab.objections.filter((o) => o.status === "fail").length)} 项为阻断性质询`,
+    "challenge",
+    agent,
+    emit,
+  );
+  addEvent(events, "node.output", "风控裁决结论", collab.summary, "challenge", agent, emit);
+
+  state.chosenId = collab.adjudicatedId;
+  state.preferredCandidateId = collab.adjudicatedId;
+  state.collaboration = collab;
+
+  if (collab.changed && state.facts !== null) {
+    const buyQ = state.facts.questions.find((q) => q.id === "ask-buy");
+    if (buyQ !== undefined && state.product !== null) {
+      const thresholdCents = Math.round(state.product.buyCents * 1.1);
+      (buyQ as { why: string }).why = `会签质询触发策略调整：采购价若高于 ${money(thresholdCents)} 将导致原推荐方案破保本，请核实真实进货成本。`;
+    }
+  }
+}
+
 function executeRisk(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): readonly Verification[] {
   const agent = dispatch(state, events, "risk", "risk", "独立验证成本、需求和策略", iteration, emit);
   const chosen = state.candidates.find((candidate) => candidate.id === state.chosenId) ?? state.candidates[0];
@@ -361,6 +413,11 @@ function executeRisk(state: InternalState, events: RunEvent[], iteration: number
       detail: state.facts === null ? "没有研究结果" : `${String(unanswered)} 个问题仍需人工确认；超过 2 个时先回到研究分支`,
       owner: "link-researcher",
     });
+    if (state.collaboration?.leftoverRisks && state.collaboration.leftoverRisks.length > 0) {
+      for (const lr of state.collaboration.leftoverRisks) {
+        rows.push(lr);
+      }
+    }
   }
   for (const row of rows) {
     if (row.status === "fail" && row.owner !== undefined) {
@@ -651,6 +708,7 @@ function artifacts(state: InternalState): Artifacts {
     bullets: state.bullets,
     report: state.report,
     assumptions: state.assumptions,
+    ...(state.collaboration ? { collaboration: state.collaboration } : {}),
   };
 }
 
@@ -700,6 +758,7 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
   const candidates = run.artifacts.candidates ? [...run.artifacts.candidates] : [];
   const iteration = sched?.iteration ?? 1 + run.loops.length;
   const state: InternalState = {
+    agents: run.agents,
     taskText: run.task.text,
     autoApprove: run.task.autoApprove,
     gateDecision: sched?.gateDecision ?? run.gateDecision ?? null,
@@ -716,6 +775,7 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
     copy: run.artifacts.copy,
     bullets: [...run.artifacts.bullets],
     report: [...run.artifacts.report],
+    collaboration: run.artifacts.collaboration,
     llm: run.llm,
     assumptions: [...run.artifacts.assumptions],
     verifications: [...run.verifications],
@@ -731,12 +791,20 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
   return { state, iteration };
 }
 
+export type WorkflowRunOptions = {
+  readonly collaboration?: boolean | undefined;
+};
+
 export async function runAgentWorkflow(
   input: { readonly id: string; readonly taskText: string; readonly autoApprove: boolean; readonly createdAt: string },
   live: LiveLlm | null = null,
   onEvent?: RunEventListener,
+  options?: WorkflowRunOptions,
 ): Promise<AgentRun> {
-  const state = initialState(input.taskText, input.autoApprove);
+  const enableCollaboration = options?.collaboration ?? true;
+  const workflow = enableCollaboration ? COLLAB_WORKFLOW : DEFAULT_WORKFLOW;
+  const agents = enableCollaboration ? AGENTS : AGENTS_V1;
+  const state = initialState(input.taskText, input.autoApprove, agents);
   const events: RunEvent[] = [];
   let status: AgentRun["status"] = "running";
   let iteration = 1;
@@ -744,17 +812,30 @@ export async function runAgentWorkflow(
     onEvent === undefined
       ? undefined
       : (event) => {
-          onEvent(event, finalize(input, state, [...events], status, state.llm, iteration));
+          onEvent(event, finalize(input, state, [...events], status, state.llm, iteration, workflow, agents));
         };
 
-  addEvent(events, "run.started", "任务开始", `工作流 ${DEFAULT_WORKFLOW.title} · 目标：${DEFAULT_WORKFLOW.intent}`, null, "planner", emit);
+  addEvent(events, "run.started", "任务开始", `工作流 ${workflow.title} · 目标：${workflow.intent}`, null, "planner", emit);
   const planner = dispatch(state, events, "plan", "planning", "理解任务并生成执行计划", 1, emit);
   runTool(events, "plan", "workflow.plan", planner, "确定并行分析、验证门和最多 2 轮额外 Self-Loop 修正", emit);
-  addEvent(events, "node.output", "规划 Agent 提交执行图", "研究 → 成本/市场并行 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验", "plan", planner, emit);
+  addEvent(
+    events,
+    "node.output",
+    "规划 Agent 提交执行图",
+    enableCollaboration
+      ? "研究 → 成本/市场并行 → 三方质询复核 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验"
+      : "研究 → 成本/市场并行 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验",
+    "plan",
+    planner,
+    emit,
+  );
 
   executeResearch(state, events, 1, emit);
   executeAccount(state, events, 1, emit);
   executeMarket(state, events, 1, emit);
+  if (enableCollaboration) {
+    executeChallenge(state, events, 1, emit);
+  }
   let lastRiskVerdicts = executeRisk(state, events, 1, emit);
 
   while (state.risk?.level === "fail" && iteration < 3) {
@@ -769,6 +850,9 @@ export async function runAgentWorkflow(
     state.adjustments.push(planned.reason);
     addEvent(events, "loop.adjusted", "反馈优化：调整策略参数", planned.reason, "adjust-loop", "risk-auditor", emit);
     executeMarket(state, events, nextIteration, emit);
+    if (enableCollaboration) {
+      executeChallenge(state, events, nextIteration, emit);
+    }
     const retryVerdicts = executeRisk(state, events, nextIteration, emit);
     const after = captureSnapshot(state);
     state.loops.push({
@@ -790,7 +874,7 @@ export async function runAgentWorkflow(
   }
   addEvent(events, "gate.awaiting", "等待人工确认", "这是高风险动作的人工介入节点：请确认成本假设、未解析字段和推荐策略", "approval", "owner", emit);
   if (!input.autoApprove) {
-    return finalize(input, state, events, "awaiting-approval", llm, iteration);
+    return finalize(input, state, events, "awaiting-approval", llm, iteration, workflow, agents);
   }
   state.gateNeeded = false;
   addEvent(events, "gate.autoApproved", "演示模式自动通过人工门", "autoApprove=true；正式部署应由用户点击确认", "approval", "owner", emit);
@@ -803,7 +887,7 @@ export async function runAgentWorkflow(
     },
     emit,
   );
-  return finalize(input, state, events, "completed", llm, iteration);
+  return finalize(input, state, events, "completed", llm, iteration, workflow, agents);
 }
 
 export async function resumeAgentWorkflow(
@@ -811,6 +895,8 @@ export async function resumeAgentWorkflow(
   decision: GateDecisionInput,
   onEvent?: RunEventListener,
 ): Promise<AgentRun> {
+  const workflow = run.workflow;
+  const agents = run.agents;
   if (run.status !== "awaiting-approval") {
     if ((run.status === "completed" || run.status === "rejected") && isSameDecision(run, decision)) {
       return run;
@@ -839,7 +925,7 @@ export async function resumeAgentWorkflow(
     onEvent === undefined
       ? undefined
       : (event) => {
-          onEvent(event, finalize(input, state, [...events], status, state.llm, iteration));
+          onEvent(event, finalize(input, state, [...events], status, state.llm, iteration, workflow, agents));
         };
 
   state.gateDecision = decision.action;
@@ -858,7 +944,7 @@ export async function resumeAgentWorkflow(
       "owner",
       emit,
     );
-    return finalize(input, state, events, "rejected", state.llm, iteration);
+    return finalize(input, state, events, "rejected", state.llm, iteration, workflow, agents);
   }
 
   const previousChosenId = state.chosenId;
@@ -895,7 +981,7 @@ export async function resumeAgentWorkflow(
     },
     emit,
   );
-  return finalize(input, state, events, "completed", state.llm, iteration);
+  return finalize(input, state, events, "completed", state.llm, iteration, workflow, agents);
 }
 
 function finalize(
@@ -905,9 +991,11 @@ function finalize(
   status: AgentRun["status"],
   llm: AgentRun["llm"],
   iteration: number = 1 + state.loops.length,
+  workflow: WorkflowDocument = DEFAULT_WORKFLOW,
+  agents: readonly AgentSpec[] = AGENTS,
 ): AgentRun {
   const currentArtifacts = artifacts(state);
-  const fingerprint = sha256Hex(canonicalJson({ workflow: DEFAULT_WORKFLOW, events, artifacts: currentArtifacts }));
+  const fingerprint = sha256Hex(canonicalJson({ workflow, events, artifacts: currentArtifacts }));
   const loads = { ...state.loads };
   const calls = { ...state.calls };
   const failures = { ...state.failures };
@@ -917,8 +1005,8 @@ function finalize(
     createdAt: input.createdAt,
     status,
     task: { text: input.taskText, autoApprove: input.autoApprove },
-    workflow: DEFAULT_WORKFLOW,
-    agents: AGENTS,
+    workflow,
+    agents,
     dispatches: [...state.dispatches],
     events,
     verifications: [...state.verifications],

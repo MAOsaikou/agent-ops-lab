@@ -59,6 +59,7 @@ const runRequestSchema = z.strictObject({
   autoApprove: z.boolean().optional(),
   id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/).optional(),
   createdAt: z.string().min(1).max(64).optional(),
+  collaboration: z.boolean().optional(),
 });
 
 const decisionSchema = z.strictObject({
@@ -157,17 +158,23 @@ export function createPricingApp(options: PricingAppOptions): Hono {
     readonly taskText: string;
     readonly autoApprove: boolean;
     readonly createdAt: string;
+    readonly collaboration?: boolean | undefined;
   }): Response => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          const run = await runAgentWorkflow(input, llmSettings.resolve(), (event, snapshot) => {
-            controller.enqueue(encoder.encode(formatAgentOpsEvent(event)));
-            if (event.nodeId === "copy" && event.type === "node.output") {
-              controller.enqueue(encoder.encode(formatAgentOpsSnapshot(snapshot)));
-            }
-          });
+          const run = await runAgentWorkflow(
+            input,
+            llmSettings.resolve(),
+            (event, snapshot) => {
+              controller.enqueue(encoder.encode(formatAgentOpsEvent(event)));
+              if (event.nodeId === "copy" && event.type === "node.output") {
+                controller.enqueue(encoder.encode(formatAgentOpsSnapshot(snapshot)));
+              }
+            },
+            { collaboration: input.collaboration },
+          );
           agentRuns.save(run);
           controller.enqueue(encoder.encode(formatAgentOpsDone(run)));
         } catch (error) {
@@ -194,6 +201,7 @@ export function createPricingApp(options: PricingAppOptions): Hono {
       taskText: parsed.data.task,
       autoApprove: parsed.data.autoApprove ?? true,
       createdAt,
+      collaboration: parsed.data.collaboration,
     });
   });
 
@@ -208,12 +216,15 @@ export function createPricingApp(options: PricingAppOptions): Hono {
       taskText: parsed.data.task,
       autoApprove: parsed.data.autoApprove ?? true,
       createdAt,
+      collaboration: parsed.data.collaboration,
     };
     if (c.req.header("accept")?.includes("text/event-stream") === true) {
       return streamAgentRun(input);
     }
     try {
-      const run = await runAgentWorkflow(input, llmSettings.resolve());
+      const run = await runAgentWorkflow(input, llmSettings.resolve(), undefined, {
+        collaboration: parsed.data.collaboration,
+      });
       agentRuns.save(run);
       return c.json(run, 201);
     } catch (error) {
@@ -280,8 +291,10 @@ export function createPricingApp(options: PricingAppOptions): Hono {
   });
 
   app.get("/api/agentops/runs/:id", (c) => {
-    const run = agentRuns.load(c.req.param("id"));
-    return run === undefined ? c.json({ code: "run-not-found" }, 404) : c.json(run);
+    const inspected = agentRuns.inspect(c.req.param("id"));
+    if (inspected.kind === "missing") return c.json({ code: "run-not-found", detail: "找不到这份评审卷宗" }, 404);
+    if (inspected.kind === "corrupt") return c.json({ code: "run-corrupt", detail: inspected.reason }, 422);
+    return c.json(inspected.run);
   });
 
   app.get("/api/agentops/runs/:id/events", (c) => {

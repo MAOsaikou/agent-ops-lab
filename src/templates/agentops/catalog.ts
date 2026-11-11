@@ -11,7 +11,36 @@ export const AGENTS: readonly AgentSpec[] = [
   { id: "risk-auditor", name: "独立风控审计", role: "独立复核保本价、目标毛利、活动价、需求假设与证据边界；失败时给出可执行修正意见。", version: "1.4.0", capabilities: { risk: 0.99, cost: 0.62 }, tools: ["pricing.verify", "pricing.simulate", "knowledge.search"], maxCallsPerRun: 4 },
   { id: "copywriter", name: "上架文案师", role: "根据选定方案生成平台限制内的标题和真实可兑现的卖点，不生成未验证承诺。", version: "1.0.0", capabilities: { copy: 0.96 }, tools: ["copy.generate"], maxCallsPerRun: 2 },
   { id: "reporter", name: "研究报告师", role: "整理多 Agent 结论、验证记录、假设与未解决风险，提供可复现的决策报告。", version: "1.0.0", capabilities: { report: 0.94 }, tools: ["report.compile"], maxCallsPerRun: 2 },
+  {
+    id: "procurement-lead",
+    name: "采购负责人",
+    role: "关注进货成本上浮、积压滞销与账期承压，通过悲观情景重估兜底利润。",
+    version: "1.0.0",
+    capabilities: { procure: 0.98, cost: 0.5, risk: 0.4 },
+    tools: ["pricing.simulate", "pricing.unit-cost", "knowledge.search"],
+    maxCallsPerRun: 3,
+  },
+  {
+    id: "pricing-lead",
+    name: "定价参谋",
+    role: "坚守目标毛利率与保本安全垫，防范价格倒挂与佣金侵蚀。",
+    version: "1.0.0",
+    capabilities: { price: 0.98, market: 0.4, cost: 0.4 },
+    tools: ["pricing.candidates", "pricing.verify", "knowledge.search"],
+    maxCallsPerRun: 3,
+  },
+  {
+    id: "growth-operator",
+    name: "推广运营",
+    role: "测算付费投流杠杆与订单规模，防范高客单低转化或获客失血。",
+    version: "1.0.0",
+    capabilities: { promote: 0.98, market: 0.4, risk: 0.3 },
+    tools: ["pricing.simulate", "copy.generate", "knowledge.search"],
+    maxCallsPerRun: 3,
+  },
 ];
+
+export const AGENTS_V1: readonly AgentSpec[] = AGENTS.slice(0, 7);
 
 export const TOOL_CATALOG = [
   { name: "product.parse", title: "商品链接与分享文案解析", kind: "parse" },
@@ -48,8 +77,33 @@ export const DEFAULT_WORKFLOW: WorkflowDocument = {
   nodes: workflowNodes,
 };
 
+const collabWorkflowNodes: readonly WorkflowNode[] = [
+  { kind: "agent", id: "plan", capability: "planning", title: "拆任务与验收标准", dependsOn: [] },
+  { kind: "agent", id: "research", capability: "intake", title: "商品信息与证据提取", dependsOn: ["plan"] },
+  { kind: "parallel", id: "parallel-analysis", branches: ["account", "market"], title: "成本与市场并行分析", dependsOn: ["research"] },
+  { kind: "agent", id: "account", capability: "cost", title: "成本会计核算", dependsOn: [] },
+  { kind: "agent", id: "market", capability: "market", title: "市场分析与情景模拟", dependsOn: [] },
+  { kind: "agent", id: "challenge", capability: "risk", title: "三方质询与会签交叉复核", dependsOn: ["parallel-analysis"] },
+  { kind: "agent", id: "risk", capability: "risk", title: "独立风控与交叉验证", dependsOn: ["challenge"] },
+  { kind: "condition", id: "risk-gate", predicate: "risk-pass", then: "copy", otherwise: "adjust-loop", title: "验证通过？", dependsOn: ["risk"] },
+  { kind: "loop", id: "adjust-loop", body: ["market", "risk"], until: "risk-pass", maxIterations: 3, title: "修正假设并重新验证", dependsOn: [] },
+  { kind: "agent", id: "copy", capability: "copy", title: "生成可兑现的上架文案", dependsOn: ["risk-gate"] },
+  { kind: "humanGate", id: "approval", title: "掌柜确认风险与方案", dependsOn: ["copy"] },
+  { kind: "agent", id: "report", capability: "report", title: "生成可复核决策报告", dependsOn: ["approval"] },
+  { kind: "verify", id: "final-check", pipeline: ["evidence", "economics", "constraints", "report"], title: "最终一致性检查", dependsOn: ["report"] },
+  { kind: "commit", id: "seal", title: "封存运行事件与结果指纹", dependsOn: ["final-check"] },
+];
+
+export const COLLAB_WORKFLOW: WorkflowDocument = {
+  id: "product-launch-review.v2",
+  title: "商品上架可行性评审（多方会签质询版）",
+  intent: "在三套报价后引入采购、定价与增长三方质询复核，裁决最优候选方案并审计残留风险",
+  nodes: collabWorkflowNodes,
+};
+
 export const WORKFLOW_TEMPLATES = [
-  { ...DEFAULT_WORKFLOW, featured: true },
+  { ...COLLAB_WORKFLOW, featured: true },
+  { ...DEFAULT_WORKFLOW, featured: false },
   {
     id: "sample-drape-review",
     title: "纯棉短袖上架审查",
@@ -64,8 +118,14 @@ export const WORKFLOW_TEMPLATES = [
   },
 ] as const;
 
-export function resolveAgent(need: Capability, loads: Readonly<Record<string, number>>, failures: Readonly<Record<string, number>>, calls: Readonly<Record<string, number>>): { readonly agent: AgentSpec; readonly scores: readonly { readonly agent: AgentSpec; readonly score: number }[] } {
-  const eligible = AGENTS.filter((agent) => (agent.capabilities[need] ?? 0) > 0 && (calls[agent.id] ?? 0) < agent.maxCallsPerRun);
+export function resolveAgent(
+  need: Capability,
+  loads: Readonly<Record<string, number>>,
+  failures: Readonly<Record<string, number>>,
+  calls: Readonly<Record<string, number>>,
+  agents: readonly AgentSpec[] = AGENTS,
+): { readonly agent: AgentSpec; readonly scores: readonly { readonly agent: AgentSpec; readonly score: number }[] } {
+  const eligible = agents.filter((agent) => (agent.capabilities[need] ?? 0) > 0 && (calls[agent.id] ?? 0) < agent.maxCallsPerRun);
   if (eligible.length === 0) {
     throw new Error(`no eligible agent for ${need}`);
   }

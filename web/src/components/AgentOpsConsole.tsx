@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ArrowLeft,
   BookOpenCheck,
   Bot,
   CheckCircle2,
@@ -27,6 +28,15 @@ import type {
   RunSummary,
   VerificationStatus,
 } from "../../../src/templates/agentops/types.js";
+import {
+  appendClause,
+  clauseForAnswer,
+  composeTaskText,
+  type AnswerKind,
+  type ComposeFieldId,
+  type ComposeForm,
+} from "../../../src/templates/agentops/compose.js";
+import { parseTaskFacts } from "../../../src/templates/agentops/task-facts.js";
 import type { Candidate, CandidateId } from "../../../src/templates/pricing/model.js";
 import {
   fetchAgentCatalog,
@@ -561,7 +571,33 @@ export function AgentOpsConsole(): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [llm, setLlm] = useState<LlmSettingsView | null>(null);
 
+  const [composeForm, setComposeForm] = useState<ComposeForm>({
+    name: "",
+    competitorYuan: "",
+    buyYuan: "",
+    shippingYuan: "",
+    packagingYuan: "",
+    targetMarginPct: "",
+    dailyOrders: "",
+    cashYuan: "",
+    adBudgetYuan: "",
+  });
+  const [composeErrors, setComposeErrors] = useState<Readonly<Partial<Record<ComposeFieldId, string>>>>({});
+  const [answerValues, setAnswerValues] = useState<Record<string, string>>({});
+
+  const handleComposeSubmit = (): void => {
+    const res = composeTaskText(composeForm);
+    if (!res.ok) {
+      setComposeErrors(res.errors);
+      return;
+    }
+    setComposeErrors({});
+    setTask(res.text);
+  };
+
   const [openedFromHistory, setOpenedFromHistory] = useState<boolean>(false);
+  const [priorRun, setPriorRun] = useState<AgentRun | null>(null);
+  const historyBackRef = useRef<HTMLButtonElement | null>(null);
   const [replayCount, setReplayCount] = useState<number | null>(null);
   const [replayAnimating, setReplayAnimating] = useState<boolean>(false);
   const rafRef = useRef<number | null>(null);
@@ -648,13 +684,41 @@ export function AgentOpsConsole(): React.JSX.Element {
     };
   }, [replayAnimating, run]);
 
-  const startRun = async (): Promise<void> => {
+  const openedFromHistoryRef = useRef(openedFromHistory);
+  openedFromHistoryRef.current = openedFromHistory;
+
+  const handleHistoryBackRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === "Escape" && openedFromHistoryRef.current) {
+        e.preventDefault();
+        handleHistoryBackRef.current();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (openedFromHistory) {
+      historyBackRef.current?.focus();
+    }
+  }, [openedFromHistory, run?.id]);
+
+  const startRun = async (overrideTask?: string): Promise<void> => {
     if (busy || decisionBusy || decisionInFlightRef.current) return;
+    const taskToRun = (overrideTask ?? task).trim();
+    if (taskToRun.length < 8) return;
+    if (overrideTask !== undefined) {
+      setTask(overrideTask);
+    }
     const { opId, signal } = beginOperation();
     setBusy(true);
     setDecisionBusy(false);
     setError(null);
     setOpenedFromHistory(false);
+    setPriorRun(null);
     setReplayCount(null);
     setReplayAnimating(false);
     setSelectedCandidateId(null);
@@ -664,7 +728,7 @@ export function AgentOpsConsole(): React.JSX.Element {
     try {
       const autoApprove = !requireApproval;
       const completedOrPaused = await streamAgentTask(
-        { task, autoApprove },
+        { task: taskToRun, autoApprove },
         (incomingEvent) => {
           if (opSeqRef.current !== opId) return;
           setStreamEvents((prev) => [...prev, incomingEvent]);
@@ -688,6 +752,7 @@ export function AgentOpsConsole(): React.JSX.Element {
       setStreamEvents([]);
       setSelectedCandidateId(null);
       setOpenedFromHistory(false);
+      setPriorRun(null);
       setReplayCount(null);
       setReplayAnimating(false);
       setError(caught instanceof Error ? caught.message : "上架评审运行失败");
@@ -704,17 +769,44 @@ export function AgentOpsConsole(): React.JSX.Element {
     setError(null);
     setReplayAnimating(false);
     setReplayCount(null);
+    const runBeforeBrowse = openedFromHistory ? priorRun : run;
     try {
       const loaded = await fetchAgentRun(id, { signal });
       if (opSeqRef.current !== opId) return;
+      setPriorRun(runBeforeBrowse);
       setRun(loaded);
       setStreamEvents(loaded.events);
+      setSelectedCandidateId(
+        isCandidateId(loaded.artifacts.chosenId) ? loaded.artifacts.chosenId : null,
+      );
       setOpenedFromHistory(true);
+      setError(null);
     } catch (caught) {
       if (opSeqRef.current !== opId || signal.aborted) return;
       setError(caught instanceof Error ? caught.message : "读取历史评审卷宗失败");
     }
   };
+
+  const handleHistoryBack = (): void => {
+    setError(null);
+    setOpenedFromHistory(false);
+    setReplayAnimating(false);
+    setReplayCount(null);
+    if (priorRun !== null) {
+      setRun(priorRun);
+      setStreamEvents(priorRun.events);
+      setSelectedCandidateId(
+        isCandidateId(priorRun.artifacts.chosenId) ? priorRun.artifacts.chosenId : null,
+      );
+      setPriorRun(null);
+    } else {
+      setRun(null);
+      setStreamEvents([]);
+      setSelectedCandidateId(null);
+      setPriorRun(null);
+    }
+  };
+  handleHistoryBackRef.current = handleHistoryBack;
 
   const handleDecision = async (action: "approve" | "reject"): Promise<void> => {
     if (
@@ -798,18 +890,28 @@ export function AgentOpsConsole(): React.JSX.Element {
   );
 
   const facts = run?.scheduler?.facts ?? null;
+  const taskFacts = useMemo(() => {
+    return run === null ? null : parseTaskFacts(run.task.text);
+  }, [run?.task.text]);
   const unit = run?.artifacts.unit ?? activeCandidate?.evaluation.unit ?? null;
   const breakEvenCents = run?.artifacts.breakEvenCents ?? activeCandidate?.evaluation.breakEvenCents ?? 0;
   const risk = run?.artifacts.risk ?? null;
   const gateFailRows = risk?.rows.filter((row) => row.status === "fail") ?? [];
   const gateWarnRows = risk?.rows.filter((row) => row.status === "warn") ?? [];
   const currentStatus: RunStatus | "idle" = busy ? "running" : (run?.status ?? "idle");
-  const statusMeta = currentStatus === "idle" ? null : RUN_STATUS_META[currentStatus];
+  const statusMeta =
+    currentStatus === "idle"
+      ? null
+      : (RUN_STATUS_META[currentStatus] ?? {
+          label: currentStatus,
+          tone: "ink" as PillTone,
+          summary: "",
+        });
   const llmMeta = llmBadgeMeta(run?.llm ?? null, llm);
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[1560px] flex-col gap-2.5 px-3 py-2 text-ink-900 sm:gap-4 sm:px-6 sm:py-4">
-      <header className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-paper-300 bg-paper-50 px-3.5 py-2 shadow-card sm:gap-3 sm:px-5 sm:py-3.5">
+    <div className="mx-auto flex min-h-screen w-full max-w-[1560px] flex-col gap-1.5 px-2 py-1 text-ink-900 sm:gap-4 sm:px-6 sm:py-4">
+      <header className="flex flex-wrap items-center justify-between gap-1 rounded-2xl border border-paper-300 bg-paper-50 px-2.5 py-1 shadow-card sm:gap-3 sm:px-5 sm:py-3.5">
         <div className="flex items-center gap-2.5 sm:gap-3.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-seal-500/40 bg-seal-100/70 text-seal-600 sm:h-11 sm:w-11">
             <BookOpenCheck className="h-4 w-4 sm:h-5 sm:w-5" />
@@ -824,7 +926,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                 data-status={currentStatus}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset sm:text-[11.5px]",
-                  statusMeta === null
+                  statusMeta === null || statusMeta.tone === "ink"
                     ? "bg-paper-150 text-ink-600 ring-ink-900/10"
                     : statusMeta.tone === "jade"
                       ? "bg-jade-100 text-jade-600 ring-jade-500/30"
@@ -856,6 +958,31 @@ export function AgentOpsConsole(): React.JSX.Element {
           </button>
         </div>
       </header>
+
+      {openedFromHistory && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ochre-500/35 bg-ochre-100/70 px-3.5 py-2 text-[12.5px] text-ink-800">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-ochre-600 shrink-0" />
+            <span>正在看历史卷宗 · 返回工作台</span>
+          </div>
+          <button
+            ref={historyBackRef}
+            type="button"
+            data-testid="history-back"
+            onClick={handleHistoryBack}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                handleHistoryBack();
+              }
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-ink-900 px-3 py-1.5 text-[12px] font-medium text-paper-50 shadow-sm transition hover:bg-ink-800 focus:outline-none focus:ring-2 focus:ring-ochre-500 focus:ring-offset-1 active:scale-[0.98]"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            返回工作台
+          </button>
+        </div>
+      )}
 
       {settingsOpen ? (
         <ModelSettingsPanel onClose={() => setSettingsOpen(false)} onChanged={setLlm} />
@@ -891,15 +1018,176 @@ export function AgentOpsConsole(): React.JSX.Element {
           }
         />
 
-        <div className="flex flex-col gap-1.5 px-3 py-2 sm:gap-3 sm:px-5 sm:py-4">
+        <div className="flex flex-col gap-1 px-2.5 py-1 sm:gap-3 sm:px-5 sm:py-4">
           <textarea
             data-testid="task-box"
             value={task}
             onChange={(event) => setTask(event.target.value)}
-            rows={3}
-            className="min-h-[68px] w-full resize-y break-all rounded-xl bg-paper-100/90 px-2.5 py-1.5 text-[12px] leading-[1.45] text-ink-900 outline-none ring-1 ring-inset ring-paper-300 focus:bg-paper-50 focus:ring-2 focus:ring-seal-500/45 sm:min-h-[84px] sm:px-3.5 sm:py-2.5 sm:text-[13px] sm:leading-relaxed"
+            rows={2}
+            className="min-h-[64px] w-full resize-y break-all rounded-xl bg-paper-100/90 px-2.5 py-1.5 text-[12px] leading-[1.45] text-ink-900 outline-none ring-1 ring-inset ring-paper-300 focus:bg-paper-50 focus:ring-2 focus:ring-seal-500/45 sm:min-h-[84px] sm:px-3.5 sm:py-2.5 sm:text-[13px] sm:leading-relaxed"
             placeholder="贴商品链接或分享文案，写上采购价、包材、快递、目标毛利和能周转的资金…"
           />
+
+          <details className="group rounded-xl border border-paper-300/80 bg-paper-100/50 px-2.5 py-0.5 text-[11px] text-ink-700">
+            <summary className="cursor-pointer select-none font-medium text-ink-800 hover:text-ink-900">
+              没有链接？按项填写
+            </summary>
+            <div className="mt-2.5 flex flex-col gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div>
+                  <label className="block text-[11px] font-medium text-ink-500">
+                    商品名 <span className="text-seal-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    data-testid="compose-name"
+                    value={composeForm.name}
+                    onChange={(e) => setComposeForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="如：纯棉短袖"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11.5px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                  {composeErrors.name && (
+                    <span className="text-[10px] text-seal-600">{composeErrors.name}</span>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-ink-500">
+                    同类售价（元）<span className="text-seal-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    data-testid="compose-competitor"
+                    value={composeForm.competitorYuan}
+                    onChange={(e) =>
+                      setComposeForm((prev) => ({ ...prev, competitorYuan: e.target.value }))
+                    }
+                    placeholder="如：39.9"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11.5px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                  {composeErrors.competitorYuan && (
+                    <span className="text-[10px] text-seal-600">
+                      {composeErrors.competitorYuan}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-ink-500">
+                    采购价（元）<span className="text-seal-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    data-testid="compose-buy"
+                    value={composeForm.buyYuan}
+                    onChange={(e) => setComposeForm((prev) => ({ ...prev, buyYuan: e.target.value }))}
+                    placeholder="如：16"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11.5px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                  {composeErrors.buyYuan && (
+                    <span className="text-[10px] text-seal-600">{composeErrors.buyYuan}</span>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-ink-500">
+                    快递（元）<span className="text-seal-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    data-testid="compose-shipping"
+                    value={composeForm.shippingYuan}
+                    onChange={(e) =>
+                      setComposeForm((prev) => ({ ...prev, shippingYuan: e.target.value }))
+                    }
+                    placeholder="如：6.5"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11.5px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                  {composeErrors.shippingYuan && (
+                    <span className="text-[10px] text-seal-600">
+                      {composeErrors.shippingYuan}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                <div>
+                  <label className="block text-[10.5px] text-ink-400">包材（元，可选）</label>
+                  <input
+                    type="text"
+                    data-testid="compose-packaging"
+                    value={composeForm.packagingYuan}
+                    onChange={(e) =>
+                      setComposeForm((prev) => ({ ...prev, packagingYuan: e.target.value }))
+                    }
+                    placeholder="默认 1.5"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10.5px] text-ink-400">目标毛利（%，可选）</label>
+                  <input
+                    type="text"
+                    data-testid="compose-margin"
+                    value={composeForm.targetMarginPct}
+                    onChange={(e) =>
+                      setComposeForm((prev) => ({ ...prev, targetMarginPct: e.target.value }))
+                    }
+                    placeholder="默认 25"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10.5px] text-ink-400">日单量（可选）</label>
+                  <input
+                    type="text"
+                    data-testid="compose-orders"
+                    value={composeForm.dailyOrders}
+                    onChange={(e) =>
+                      setComposeForm((prev) => ({ ...prev, dailyOrders: e.target.value }))
+                    }
+                    placeholder="如：50"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10.5px] text-ink-400">周转资金（元，可选）</label>
+                  <input
+                    type="text"
+                    data-testid="compose-cash"
+                    value={composeForm.cashYuan}
+                    onChange={(e) =>
+                      setComposeForm((prev) => ({ ...prev, cashYuan: e.target.value }))
+                    }
+                    placeholder="默认 300"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10.5px] text-ink-400">推广预算（元，可选）</label>
+                  <input
+                    type="text"
+                    data-testid="compose-ad"
+                    value={composeForm.adBudgetYuan}
+                    onChange={(e) =>
+                      setComposeForm((prev) => ({ ...prev, adBudgetYuan: e.target.value }))
+                    }
+                    placeholder="默认 30"
+                    className="mt-0.5 w-full rounded-lg border border-paper-300 bg-paper-50 px-2 py-1 text-[11px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-seal-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end pt-1">
+                <button
+                  type="button"
+                  data-testid="compose-submit"
+                  onClick={handleComposeSubmit}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-ink-900 px-3 py-1.5 text-[12px] font-medium text-paper-50 shadow-sm transition hover:bg-ink-800 active:scale-[0.98]"
+                >
+                  填入描述
+                </button>
+              </div>
+            </div>
+          </details>
 
           <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-2.5">
             <div className="grid w-full grid-cols-2 gap-1 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-1.5">
@@ -961,7 +1249,15 @@ export function AgentOpsConsole(): React.JSX.Element {
         <div className="flex min-w-0 flex-col gap-2.5 sm:gap-4">
           <Panel data-testid="three-strategies">
             <PanelHead
-              title="三套策略，由你拍板"
+              title={
+                run?.status === "completed"
+                  ? `已按「${strategyName(run.artifacts.chosenId)}」拍板`
+                  : run?.status === "rejected"
+                    ? "已驳回"
+                    : run === null
+                      ? "三套策略，由你拍板"
+                      : "三套策略"
+              }
               desc={
                 <span className="hidden sm:inline">
                   点一张卡片看现金流和成本；等你拍板时，选中的就是通过方案。
@@ -976,10 +1272,10 @@ export function AgentOpsConsole(): React.JSX.Element {
               }
             />
 
-            <div className="flex flex-col gap-2 p-2.5 sm:gap-5 sm:p-5">
+            <div className="flex flex-col gap-1.5 p-2 sm:gap-5 sm:p-5">
               <div
                 className={cn(
-                  "flex flex-col gap-1.5 rounded-2xl px-2.5 py-2 sm:gap-2 sm:px-4 sm:py-3.5",
+                  "flex flex-col gap-1 rounded-2xl px-2 py-1.5 sm:gap-2 sm:px-4 sm:py-3.5",
                   run === null
                     ? "border border-paper-300 bg-paper-100/70"
                     : "border-2 border-seal-500/35 bg-seal-100/30",
@@ -990,7 +1286,17 @@ export function AgentOpsConsole(): React.JSX.Element {
                     <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                       <Gavel className="h-3.5 w-3.5 text-seal-600 sm:h-4 sm:w-4" />
                       <span className="font-display text-[14px] font-semibold text-ink-900 sm:text-[15px]">
-                        请你拍板
+                        {run === null
+                          ? "请你拍板"
+                          : currentStatus === "running"
+                            ? "会签进行中"
+                            : run.status === "awaiting-approval"
+                              ? "请你拍板"
+                              : run.status === "completed"
+                                ? "已拍板"
+                                : run.status === "rejected"
+                                  ? "已驳回"
+                                  : "请你拍板"}
                       </span>
                       {run === null ? (
                         <Pill tone="plain">请先运行评审</Pill>
@@ -1102,19 +1408,71 @@ export function AgentOpsConsole(): React.JSX.Element {
               </div>
 
               {candidates.length > 0 ? (
-                <div className="grid gap-2 md:grid-cols-3 md:gap-3.5">
-                  {candidates.map((candidate) => (
-                    <div key={candidate.id} data-testid={`strategy-${candidate.id}`}>
-                      <CandidateCard
-                        candidate={candidate}
-                        recommended={candidate.id === run?.artifacts.chosenId}
-                        selected={candidate.id === activeCandidateId}
-                        disabled={decisionBusy}
-                        onSelect={() => setSelectedCandidateId(candidate.id)}
-                      />
+                (() => {
+                  const isSealed = !busy && (run?.status === "completed" || run?.status === "rejected");
+                  if (isSealed) {
+                    const chosenCand = candidates.find((c) => c.id === run?.artifacts.chosenId) ?? candidates[0]!;
+                    const otherCands = candidates.filter((c) => c.id !== chosenCand.id);
+                    return (
+                      <div className="flex flex-col gap-2.5">
+                        <div key={chosenCand.id} data-testid={`strategy-${chosenCand.id}`}>
+                          <CandidateCard
+                            candidate={chosenCand}
+                            recommended={true}
+                            selected={true}
+                            disabled={decisionBusy}
+                            onSelect={() => setSelectedCandidateId(chosenCand.id)}
+                          />
+                        </div>
+                        {otherCands.length > 0 && (
+                          <details
+                            data-testid="other-strategies"
+                            className="group rounded-xl border border-paper-300/80 bg-paper-100/50 p-2.5 text-[12px] text-ink-700"
+                          >
+                            <summary className="cursor-pointer select-none font-medium text-ink-700 hover:text-ink-900 focus:outline-none focus:ring-2 focus:ring-seal-500 rounded">
+                              另外两套策略
+                            </summary>
+                            <div className="mt-2.5 grid gap-2 md:grid-cols-2 md:gap-3.5">
+                              {otherCands.map((candidate) => (
+                                <div key={candidate.id} data-testid={`strategy-${candidate.id}`}>
+                                  <CandidateCard
+                                    candidate={candidate}
+                                    recommended={false}
+                                    selected={candidate.id === activeCandidateId}
+                                    disabled={decisionBusy}
+                                    onSelect={() => setSelectedCandidateId(candidate.id)}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    );
+                  }
+                  const displayCandidates = (() => {
+                    const chosenId = run?.artifacts.chosenId;
+                    if (!chosenId) return candidates;
+                    const chosen = candidates.find((c) => c.id === chosenId);
+                    if (!chosen) return candidates;
+                    return [chosen, ...candidates.filter((c) => c.id !== chosenId)];
+                  })();
+                  return (
+                    <div className="grid gap-2 md:grid-cols-3 md:gap-3.5">
+                      {displayCandidates.map((candidate) => (
+                        <div key={candidate.id} data-testid={`strategy-${candidate.id}`}>
+                          <CandidateCard
+                            candidate={candidate}
+                            recommended={candidate.id === run?.artifacts.chosenId}
+                            selected={candidate.id === activeCandidateId}
+                            disabled={decisionBusy}
+                            onSelect={() => setSelectedCandidateId(candidate.id)}
+                          />
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  );
+                })()
               ) : (
                 <div className="rounded-xl border border-dashed border-paper-300 bg-paper-100/40 px-4 py-6 text-center text-[13px] text-ink-500 sm:py-8">
                   点上面「开始上架评审」后，这里会给出稳价、跟价、冲量三套方案。
@@ -1122,8 +1480,8 @@ export function AgentOpsConsole(): React.JSX.Element {
               )}
 
               {activeCandidate === undefined ? null : (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
+                <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
+                  <div className="min-w-0 rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <div className="font-display text-[14.5px] font-semibold text-ink-900">
@@ -1140,7 +1498,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                     <CostBreakdown evaluation={activeCandidate.evaluation} />
                   </div>
 
-                  <div className="rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
+                  <div className="min-w-0 rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <div>
                         <div className="font-display text-[14.5px] font-semibold text-ink-900">
@@ -1160,20 +1518,20 @@ export function AgentOpsConsole(): React.JSX.Element {
               )}
 
               {activeCandidate !== undefined && run !== null ? (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-paper-300 bg-paper-50 p-4">
-                    <div className="mb-3 flex items-center justify-between">
+                <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
+                  <div className="min-w-0 rounded-2xl border border-paper-300 bg-paper-50 p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-1">
                       <span className="font-display text-[14.5px] font-semibold text-ink-900">
                         这套策略的风控
                       </span>
-                      <span className="text-[11.5px] text-ink-500">{activeCandidate.verdict}</span>
+                      <span className="text-[11.5px] text-ink-500 break-words">{activeCandidate.verdict}</span>
                     </div>
                     <ChecksList rows={activeCandidate.checks} />
                   </div>
 
-                  <div className="flex flex-col justify-between gap-3 rounded-2xl border border-paper-300 bg-paper-50 p-4">
+                  <div className="flex min-w-0 flex-col justify-between gap-3 rounded-2xl border border-paper-300 bg-paper-50 p-4">
                     <div>
-                      <div className="mb-2 flex items-center justify-between">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-1">
                         <span className="font-display text-[14.5px] font-semibold text-ink-900">
                           决议和报告
                         </span>
@@ -1337,16 +1695,71 @@ export function AgentOpsConsole(): React.JSX.Element {
 
                       {facts !== null && facts.questions.length > 0 ? (
                         <div className="rounded-lg border border-ochre-500/30 bg-ochre-100/50 px-3 py-2">
-                          <div className="text-[11.5px] font-semibold text-ochre-500">
+                          <div className="text-[11.5px] font-semibold text-ochre-600">
                             还有这些问题要确认：
                           </div>
-                          <ul className="mt-1 list-disc space-y-1 pl-4 text-[11.5px] text-ink-700">
-                            {facts.questions.map((question) => (
-                              <li key={question.id}>
-                                <span className="font-medium text-ink-900">{question.ask}</span>
-                                <span className="text-ink-500">（{question.why}）</span>
-                              </li>
-                            ))}
+                          <ul className="mt-1.5 space-y-2 text-[11.5px] text-ink-700">
+                            {facts.questions.map((question) => {
+                              const answerKind: AnswerKind | null =
+                                question.id === "ask-buy"
+                                  ? "buy"
+                                  : question.id === "ask-shipping"
+                                    ? "shipping"
+                                    : question.id === "ask-orders"
+                                      ? "orders"
+                                      : null;
+                              return (
+                                <li
+                                  key={question.id}
+                                  className="flex flex-col gap-1 rounded-lg border border-paper-200/80 bg-paper-50 p-2 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <span className="font-medium text-ink-900">{question.ask}</span>
+                                    <span className="block text-[11px] text-ink-500 sm:ml-1 sm:inline">
+                                      （{question.why}）
+                                    </span>
+                                  </div>
+                                  {answerKind !== null && run !== null && (
+                                    <div className="mt-1 flex shrink-0 items-center gap-1.5 sm:mt-0">
+                                      <input
+                                        type="text"
+                                        data-testid={`answer-input-${question.id}`}
+                                        value={answerValues[question.id] ?? ""}
+                                        onChange={(e) =>
+                                          setAnswerValues((prev) => ({
+                                            ...prev,
+                                            [question.id]: e.target.value,
+                                          }))
+                                        }
+                                        placeholder={
+                                          question.id === "ask-orders" ? "输入单量" : "输入金额"
+                                        }
+                                        className="w-20 rounded border border-paper-300 bg-paper-50 px-2 py-1 text-[11px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-ochre-500"
+                                      />
+                                      <button
+                                        type="button"
+                                        data-testid={`answer-submit-${question.id}`}
+                                        disabled={busy || decisionBusy}
+                                        onClick={() => {
+                                          const val = answerValues[question.id] ?? "";
+                                          const cl = clauseForAnswer(answerKind, val);
+                                          if (!cl.ok) {
+                                            setError(`追问回答无效：${cl.error}`);
+                                            return;
+                                          }
+                                          const nextTask = appendClause(run.task.text, cl.clause);
+                                          setTask(nextTask);
+                                          void startRun(nextTask);
+                                        }}
+                                        className="rounded bg-ochre-600 px-2 py-1 text-[11px] font-medium text-paper-50 shadow-sm transition hover:bg-ochre-700 active:scale-[0.98] disabled:opacity-50"
+                                      >
+                                        补充并重评
+                                      </button>
+                                    </div>
+                                  )}
+                                </li>
+                              );
+                            })}
                           </ul>
                         </div>
                       ) : null}
@@ -1394,16 +1807,30 @@ export function AgentOpsConsole(): React.JSX.Element {
 
                       <div className="grid grid-cols-2 gap-1.5 text-[11.5px] tabular sm:grid-cols-3">
                         <div className="rounded-lg bg-paper-50 px-2.5 py-1.5 ring-1 ring-inset ring-paper-200">
-                          <span className="text-ink-500">采购：</span>
-                          <span className="font-medium text-ink-900">{money(unit.buyCents)}</span>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-ink-500">采购：</span>
+                            {taskFacts?.buyCents === null ? (
+                              <span className="rounded bg-ochre-100 px-1 py-0.5 text-[9.5px] font-normal text-ochre-600 ring-1 ring-inset ring-ochre-500/20">
+                                未提供，演示值
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-0.5 font-medium text-ink-900">{money(unit.buyCents)}</div>
                         </div>
                         <div className="rounded-lg bg-paper-50 px-2.5 py-1.5 ring-1 ring-inset ring-paper-200">
                           <span className="text-ink-500">包材：</span>
                           <span className="font-medium text-ink-900">{money(unit.packagingCents)}</span>
                         </div>
                         <div className="rounded-lg bg-paper-50 px-2.5 py-1.5 ring-1 ring-inset ring-paper-200">
-                          <span className="text-ink-500">快递：</span>
-                          <span className="font-medium text-ink-900">{money(unit.shippingCents)}</span>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-ink-500">快递：</span>
+                            {taskFacts?.shippingCents === null ? (
+                              <span className="rounded bg-ochre-100 px-1 py-0.5 text-[9.5px] font-normal text-ochre-600 ring-1 ring-inset ring-ochre-500/20">
+                                未提供，演示值
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-0.5 font-medium text-ink-900">{money(unit.shippingCents)}</div>
                         </div>
                         <div className="rounded-lg bg-paper-50 px-2.5 py-1.5 ring-1 ring-inset ring-paper-200">
                           <span className="text-ink-500">佣金：</span>
@@ -1548,6 +1975,90 @@ export function AgentOpsConsole(): React.JSX.Element {
                 </div>
               </div>
 
+              {run?.artifacts.collaboration ? (
+                <details
+                  data-testid="collaboration-section"
+                  open={run.artifacts.collaboration.changed}
+                  className="group rounded-xl border border-paper-300 bg-paper-100/50 p-4 transition-all"
+                >
+                  <summary className="cursor-pointer select-none">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-display text-[14.5px] font-semibold text-ink-900">
+                          三点五、会签质询与交叉复核
+                        </span>
+                        <Pill tone={run.artifacts.collaboration.changed ? "seal" : "jade"}>
+                          {run.artifacts.collaboration.changed ? "方案已裁决改动" : "三方达成共识"}
+                        </Pill>
+                      </div>
+                      <span className="text-[11px] text-ink-400 group-open:hidden">点击展开质询辩论详情</span>
+                    </div>
+                    <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-ink-700">
+                      {run.artifacts.collaboration.summary}
+                    </p>
+                  </summary>
+
+                  <div className="mt-3.5 flex flex-col gap-3 border-t border-paper-200/80 pt-3">
+                    <div>
+                      <div className="mb-1.5 text-[11.5px] font-semibold text-ink-600">利益人提议方案与初衷</div>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {run.artifacts.collaboration.proposals.map((proposal) => (
+                          <div
+                            key={proposal.role}
+                            className="rounded-lg border border-paper-300/80 bg-paper-50 p-2.5 text-[11.5px]"
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-semibold text-ink-900">{proposal.roleName}</span>
+                              <Pill tone="ink">{proposal.candidateLabel.split("·")[0]?.trim() ?? proposal.candidateLabel}</Pill>
+                            </div>
+                            <div className="mt-1 text-[11px] text-ink-500">
+                              {proposal.metricName}：<span className="font-semibold tabular text-ink-800">{proposal.metricValue}</span>
+                            </div>
+                            <p className="mt-1 text-[10.5px] leading-snug text-ink-600">{proposal.rationale}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {run.artifacts.collaboration.objections.length > 0 ? (
+                      <div>
+                        <div className="mb-1.5 text-[11.5px] font-semibold text-ink-600">交叉质询与压力测试记录</div>
+                        <div className="overflow-x-auto rounded-lg border border-paper-300/80 bg-paper-50">
+                          <table className="w-full text-left text-[11px]">
+                            <thead className="border-b border-paper-200 bg-paper-100/60 text-ink-500">
+                              <tr>
+                                <th className="px-2.5 py-1.5 font-medium">提出方</th>
+                                <th className="px-2.5 py-1.5 font-medium">针对方案</th>
+                                <th className="px-2.5 py-1.5 font-medium">检查项目</th>
+                                <th className="px-2.5 py-1.5 font-medium">质询结论</th>
+                                <th className="px-2.5 py-1.5 font-medium">核算数据与依据</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-paper-200/60">
+                              {run.artifacts.collaboration.objections.map((obj, i) => (
+                                <tr key={`${obj.challenger}-${obj.targetCandidateId}-${obj.checkId}-${String(i)}`}>
+                                  <td className="whitespace-nowrap px-2.5 py-1.5 font-medium text-ink-800">{obj.challengerName}</td>
+                                  <td className="whitespace-nowrap px-2.5 py-1.5">{strategyName(obj.targetCandidateId)}</td>
+                                  <td className="whitespace-nowrap px-2.5 py-1.5 font-medium text-ink-700">{obj.title}</td>
+                                  <td className="whitespace-nowrap px-2.5 py-1.5">
+                                    <Pill tone={obj.status === "fail" ? "seal" : obj.status === "warn" ? "ochre" : "jade"}>
+                                      {obj.status === "fail" ? "阻断异议" : obj.status === "warn" ? "提示警惕" : "通过"}
+                                    </Pill>
+                                  </td>
+                                  <td className="max-w-[280px] break-words px-2.5 py-1.5 text-ink-600">{obj.detail}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <CredentialLine events={visibleEvents} nodeId="challenge" run={run} />
+                  </div>
+                </details>
+              ) : null}
+
               <LoopComparisonSection run={run} visibleEvents={visibleEvents} />
 
               {run === null ? null : (
@@ -1649,7 +2160,11 @@ export function AgentOpsConsole(): React.JSX.Element {
                 <p className="px-2 py-3 text-[12px] text-ink-400">还没有记录</p>
               ) : (
                 runs.map((item) => {
-                  const itemStatus = RUN_STATUS_META[item.status];
+                  const itemStatus = RUN_STATUS_META[item.status] ?? {
+                    label: item.status,
+                    tone: "ink" as PillTone,
+                    summary: "",
+                  };
                   return (
                     <button
                       key={item.id}
@@ -1669,8 +2184,10 @@ export function AgentOpsConsole(): React.JSX.Element {
                       <div className="flex items-center justify-between gap-1.5">
                         <Pill tone={itemStatus.tone}>{itemStatus.label}</Pill>
                         <span className="tabular text-[11px] font-semibold text-ink-800">
-                          {item.priceCents > 0 ? money(item.priceCents) : "—"} · 毛利{" "}
-                          {pct(item.margin, 0)}
+                          {item.priceCents > 0
+                            ? `¥${String(Math.floor(item.priceCents / 100))}.${String(item.priceCents % 100).padStart(2, "0")}`
+                            : "—"}{" "}
+                          · 毛利 {String(Math.round(item.margin * 100))}%
                         </span>
                       </div>
                       <div className="mt-1 line-clamp-2 text-[11.5px] font-medium text-ink-800">
