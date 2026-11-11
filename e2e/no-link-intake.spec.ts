@@ -86,8 +86,10 @@ test.describe("Phase 2: 无链接填单与诚实追问", () => {
     await page.getByTestId("run-button").click();
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
 
-    // Section 二标出采购价为「未提供，演示值」
+    // 直接试算也必须在首屏拍板区附近诚实标出「未提供，演示值」，无需展开审计折叠项
+    await expect(page.getByTestId("review-audit")).not.toHaveAttribute("open", "");
     await expect(page.getByText("未提供，演示值")).toBeVisible();
+    await expect(page.getByTestId("followup-questions")).toBeVisible();
 
     // Section 一显示 ask-buy 追问输入框
     const buyInput = page.getByTestId("answer-input-ask-buy");
@@ -117,4 +119,22 @@ test("助手补答可以纠正原描述中无效的参考售价", async ({ page 
   await page.getByTestId("intake-supplement").click();
   await expect(page.getByTestId("intake-ready")).toBeVisible();
   await expect(page.getByTestId("intake-preflight")).toContainText("39.90 元");
+});
+
+test("手机上直接试算缺采购价：补充框首屏可见、能直接填写重评，不必展开审计折叠项", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page
+    .getByTestId("task-box")
+    .fill("评估护颈枕价格与现金流。京东价 ¥89，快递 7 元，日单量 50，目标毛利 30%。");
+  await page.getByTestId("run-button").click();
+  await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
+  const input = page.getByTestId("answer-input-ask-buy");
+  await expect(input).toBeInViewport();
+  await expect(page.getByTestId("review-audit")).not.toHaveAttribute("open", "");
+  await input.fill("18.5");
+  await page.getByTestId("answer-submit-ask-buy").click();
+  await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
+  await expect(page.getByTestId("answer-input-ask-buy")).toHaveCount(0);
+  await expect(page.getByTestId("task-box")).toHaveValue(/采购价 18.5 元/);
 });

@@ -32,7 +32,6 @@ import {
   appendClause,
   clauseForAnswer,
   composeTaskText,
-  type AnswerKind,
   type ComposeFieldId,
   type ComposeForm,
 } from "../../../src/templates/agentops/compose.js";
@@ -57,6 +56,7 @@ import { CollaborationEvidence } from "./CollaborationEvidence.js";
 import { CopyBlock } from "./CopyBlock.js";
 import { CostBreakdown } from "./CostBreakdown.js";
 import { DeliberationBoard } from "./DeliberationBoard.js";
+import { FollowUpAnswers, type FollowUpItem } from "./FollowUpAnswers.js";
 import { ModelSettingsPanel } from "./ModelSettings.js";
 import { ActionButton, Panel, PanelHead, Pill, type PillTone } from "./Primitives.js";
 import { ProfitCurve } from "./ProfitCurve.js";
@@ -709,6 +709,20 @@ export function AgentOpsConsole(): React.JSX.Element {
     }
   }, [openedFromHistory, run?.id]);
 
+  // On a phone the page reflows when a run starts and again when the dossier lands; without this the
+  // browser's scroll anchoring leaves the merchant at the page bottom, away from the decision.
+  const [pendingBoardScroll, setPendingBoardScroll] = useState(false);
+  useEffect(() => {
+    if (!pendingBoardScroll || run === null) return;
+    if (typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 639px)").matches) {
+      setPendingBoardScroll(false);
+      return;
+    }
+    const board = document.querySelector('[data-testid="three-strategies"]');
+    if (board !== null && typeof board.scrollIntoView === "function") board.scrollIntoView({ block: "start" });
+    if (!busy) setPendingBoardScroll(false);
+  }, [pendingBoardScroll, run, busy]);
+
   const startRun = async (overrideTask?: string): Promise<void> => {
     if (busy || decisionBusy || decisionInFlightRef.current) return;
     const taskToRun = (overrideTask ?? task).trim();
@@ -718,6 +732,7 @@ export function AgentOpsConsole(): React.JSX.Element {
     }
     const { opId, signal } = beginOperation();
     setBusy(true);
+    setPendingBoardScroll(true);
     setDecisionBusy(false);
     setError(null);
     setOpenedFromHistory(false);
@@ -897,6 +912,16 @@ export function AgentOpsConsole(): React.JSX.Element {
     return run === null ? null : parseTaskFacts(run.task.text);
   }, [run?.task.text]);
   const unit = run?.artifacts.unit ?? activeCandidate?.evaluation.unit ?? null;
+  const followUps: readonly FollowUpItem[] = useMemo(() => {
+    if (run === null || run.status === "running" || facts === null || unit === null) return [];
+    const items: FollowUpItem[] = [];
+    for (const question of facts.questions) {
+      if (question.id === "ask-buy") items.push({ id: question.id, kind: "buy", ask: question.ask, demo: money(unit.buyCents) });
+      else if (question.id === "ask-shipping") items.push({ id: question.id, kind: "shipping", ask: question.ask, demo: money(unit.shippingCents) });
+      else if (question.id === "ask-orders") items.push({ id: question.id, kind: "orders", ask: question.ask, demo: String(run.artifacts.product?.marketOrders ?? "默认") + " 单/日" });
+    }
+    return items;
+  }, [run, facts, unit]);
   const breakEvenCents = run?.artifacts.breakEvenCents ?? activeCandidate?.evaluation.breakEvenCents ?? 0;
   const risk = run?.artifacts.risk ?? null;
   const gateFailRows = risk?.rows.filter((row) => row.status === "fail") ?? [];
@@ -1278,18 +1303,20 @@ export function AgentOpsConsole(): React.JSX.Element {
               }
               right={
                 activeCandidate === undefined ? null : (
-                  <Pill tone="seal">
-                    当前检视：{activeCandidate.label}（{money(activeCandidate.priceCents)}）
-                  </Pill>
+                  <span className="hidden sm:inline-flex">
+                    <Pill tone="seal">
+                      当前检视：{activeCandidate.label}（{money(activeCandidate.priceCents)}）
+                    </Pill>
+                  </span>
                 )
               }
             />
 
             <div className="flex flex-col gap-2 p-2 sm:gap-3 sm:p-4">
-              {activeCandidate === undefined ? null : <section data-testid="decision-overview" aria-label="决策摘要" className="rounded-xl bg-ink-900 px-3 py-3 text-paper-50 sm:px-5 sm:py-4">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-1 text-xs text-paper-300"><span>{run?.artifacts.product?.name ?? "商品评审"} / {activeCandidate.id === run?.artifacts.chosenId ? "推荐" : "当前检视"} {activeCandidate.label}</span><span>30 天情景试算</span></div>
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-                  {[{ label: "建议售价", value: money(activeCandidate.priceCents) }, { label: "毛利率", value: pct(activeCandidate.evaluation.daily.margin) }, { label: "较差情况利润 p10", value: moneyInt(activeCandidate.sim.p10Cents) }, { label: "保本红线", value: money(breakEvenCents) }].map((metric) => <div key={metric.label}><dt className="text-[10.5px] text-paper-300">{metric.label}</dt><dd data-testid={metric.label === "保本红线" ? "break-even-price" : undefined} className="mt-1 font-display text-xl font-semibold tabular sm:text-2xl">{metric.value}</dd></div>)}
+              {activeCandidate === undefined ? null : <section data-testid="decision-overview" aria-label="决策摘要" className="rounded-xl bg-ink-900 px-3 py-2.5 text-paper-50 sm:px-5 sm:py-4">
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-1 text-xs text-paper-300 sm:mb-2"><span className="min-w-0 max-w-full truncate">{run?.artifacts.product?.name ?? "商品评审"} / {activeCandidate.id === run?.artifacts.chosenId ? "推荐" : "当前检视"} {activeCandidate.label}</span><span className="hidden sm:inline">30 天情景试算</span></div>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-4 sm:gap-y-3">
+                  {[{ label: "建议售价", value: money(activeCandidate.priceCents) }, { label: "毛利率", value: pct(activeCandidate.evaluation.daily.margin) }, { label: "较差情况利润 p10", value: moneyInt(activeCandidate.sim.p10Cents) }, { label: "保本红线", value: money(breakEvenCents) }].map((metric) => <div key={metric.label}><dt className="text-[10.5px] text-paper-300">{metric.label}</dt><dd data-testid={metric.label === "保本红线" ? "break-even-price" : undefined} className="mt-0.5 font-display text-lg font-semibold tabular sm:mt-1 sm:text-2xl">{metric.value}</dd></div>)}
                 </dl>
               </section>}
               {run?.llm.mode === "fallback" ? <div data-testid="model-fallback-notice" className="rounded-lg border border-ochre-500/30 bg-ochre-100/60 px-3 py-2 text-xs leading-relaxed text-ink-700"><strong>模型未完成，已保留本地核算。</strong> {run.llm.note}<span className="block text-ink-600">下方建议包含规则结果；未完成的模型意见不会当作已通过会签。</span></div> : null}
@@ -1342,13 +1369,13 @@ export function AgentOpsConsole(): React.JSX.Element {
                         </Pill>
                       ) : null}
                     </div>
-                    <p className="mt-0.5 text-[11.5px] leading-snug text-ink-600 sm:mt-1 sm:text-[12px] sm:leading-relaxed">
+                    <p className={cn("mt-0.5 text-[11.5px] leading-snug text-ink-600 sm:mt-1 sm:text-[12px] sm:leading-relaxed", run?.status === "awaiting-approval" && currentStatus !== "running" && "hidden sm:block")}>
                       {run === null
                         ? "评审结束后，在这里选稳价、跟价或冲量，然后通过或驳回。"
                         : currentStatus === "running"
                           ? "结果按实际执行进度更新，全部评审完成后解锁拍板。"
                           : run.status === "awaiting-approval"
-                            ? `现在选的是「${strategyName(activeCandidateId)}」${activeCandidate ? `（售价 ${money(activeCandidate.priceCents)}，毛利 ${pct(activeCandidate.evaluation.daily.margin)}${breakEvenCents > 0 ? `，保本红线 ${money(breakEvenCents)}` : ""}）` : ""}。通过后会按这个方案记下。`
+                            ? `现在选的是「${strategyName(activeCandidateId)}」，数字见上方。通过后会按这个方案记下。`
                             : run.status === "rejected"
                               ? "这次方案已被驳回，不能再改决定。"
                               : `已按「${strategyName(run.artifacts.chosenId)}」记下。`}
@@ -1377,7 +1404,12 @@ export function AgentOpsConsole(): React.JSX.Element {
                               ? "已拍板封存"
                               : run.status === "rejected"
                                 ? "已驳回封存"
-                                : `拍板通过${activeCandidate ? `（${activeCandidate.label}）` : ""}`}
+                                : (
+                                <>
+                                  拍板通过
+                                  {activeCandidate ? <span className="hidden sm:inline">（{activeCandidate.label}）</span> : null}
+                                </>
+                              )}
                     </ActionButton>
 
                     <ActionButton
@@ -1396,7 +1428,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                   </div>
                 </div>
 
-                {[...gateFailRows, ...gateWarnRows].length === 0 ? null : <ul data-testid="decision-priorities" className="space-y-1 border-l-2 border-seal-500 pl-2 text-[11px] leading-snug text-ink-700">{[...gateFailRows, ...gateWarnRows].slice(0, 3).map((row) => <li key={row.id}><span className="font-semibold text-seal-600">{row.title}</span>：{row.detail.slice(0, 42)}{row.detail.length > 42 ? "…" : ""}</li>)}</ul>}
+                {[...gateFailRows, ...gateWarnRows].length === 0 ? null : <ul data-testid="decision-priorities" className="space-y-1 border-l-2 border-seal-500 pl-2 text-[11px] leading-snug text-ink-700">{[...gateFailRows, ...gateWarnRows].slice(0, 3).map((row, index) => <li key={row.id} className={index === 0 ? undefined : "hidden sm:list-item"}><span className="font-semibold text-seal-600">{row.title}</span>：{row.detail.slice(0, 42)}{row.detail.length > 42 ? "…" : ""}</li>)}</ul>}
                 {gateFailRows.length > 0 || gateWarnRows.length > 0 ? (
                   <details
                     data-testid="gate-unresolved-risks"
@@ -1426,8 +1458,26 @@ export function AgentOpsConsole(): React.JSX.Element {
                   </details>
                 ) : null}
 
-                <CredentialLine events={visibleEvents} nodeId="approval" run={run} />
+                <div className="hidden sm:block"><CredentialLine events={visibleEvents} nodeId="approval" run={run} /></div>
               </div>
+
+              <FollowUpAnswers
+                items={followUps}
+                values={answerValues}
+                disabled={busy || decisionBusy}
+                onChange={(id, value) => { setAnswerValues((prev) => ({ ...prev, [id]: value })); }}
+                onSubmit={(item) => {
+                  if (run === null) return;
+                  const cl = clauseForAnswer(item.kind, answerValues[item.id] ?? "");
+                  if (!cl.ok) {
+                    setError(`追问回答无效：${cl.error}`);
+                    return;
+                  }
+                  const nextTask = appendClause(run.task.text, cl.clause);
+                  setTask(nextTask);
+                  void startRun(nextTask);
+                }}
+              />
 
               {candidates.length > 0 ? (
                 (() => {
@@ -1501,7 +1551,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                 </div>
               )}
 
-              <details data-testid="strategy-details" className="rounded-xl border border-paper-300 bg-paper-100/40 p-3"><summary className="cursor-pointer text-xs font-medium text-ink-700">成本、现金流与完整风控</summary><div className="mt-3 space-y-4">
+              <details data-testid="cost-details" className="rounded-xl border border-paper-300 bg-paper-100/40 p-3"><summary className="cursor-pointer text-xs font-medium text-ink-700">成本、现金流与完整风控</summary><div className="mt-3 space-y-4">
               {activeCandidate === undefined ? null : (
                 <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
                   <div className="min-w-0 rounded-2xl border border-paper-300 bg-paper-100/40 p-4">
@@ -1668,7 +1718,7 @@ export function AgentOpsConsole(): React.JSX.Element {
               }
             />
 
-            <details data-testid="review-audit" className="p-3 sm:p-4"><summary className="cursor-pointer text-xs font-semibold text-ink-700">查看商品证据、核算台账与修正记录</summary>
+            <details data-testid="review-audit" open={run === null || busy} className="p-3 sm:p-4"><summary className="cursor-pointer text-xs font-semibold text-ink-700">查看商品证据、核算台账与修正记录</summary>
             <div className="mt-3 flex flex-col gap-3">
               <div className="grid gap-3.5 lg:grid-cols-2">
                 <div className="rounded-xl border border-paper-300 bg-paper-100/50 p-4">
@@ -1726,67 +1776,20 @@ export function AgentOpsConsole(): React.JSX.Element {
                             还有这些问题要确认：
                           </div>
                           <ul className="mt-1.5 space-y-2 text-[11.5px] text-ink-700">
-                            {facts.questions.map((question) => {
-                              const answerKind: AnswerKind | null =
-                                question.id === "ask-buy"
-                                  ? "buy"
-                                  : question.id === "ask-shipping"
-                                    ? "shipping"
-                                    : question.id === "ask-orders"
-                                      ? "orders"
-                                      : null;
-                              return (
-                                <li
-                                  key={question.id}
-                                  className="flex flex-col gap-1 rounded-lg border border-paper-200/80 bg-paper-50 p-2 sm:flex-row sm:items-center sm:justify-between"
-                                >
-                                  <div className="min-w-0 flex-1">
-                                    <span className="font-medium text-ink-900">{question.ask}</span>
-                                    <span className="block text-[11px] text-ink-500 sm:ml-1 sm:inline">
-                                      （{question.why}）
-                                    </span>
-                                  </div>
-                                  {answerKind !== null && run !== null && (
-                                    <div className="mt-1 flex shrink-0 items-center gap-1.5 sm:mt-0">
-                                      <input
-                                        type="text"
-                                        data-testid={`answer-input-${question.id}`}
-                                        value={answerValues[question.id] ?? ""}
-                                        onChange={(e) =>
-                                          setAnswerValues((prev) => ({
-                                            ...prev,
-                                            [question.id]: e.target.value,
-                                          }))
-                                        }
-                                        placeholder={
-                                          question.id === "ask-orders" ? "输入单量" : "输入金额"
-                                        }
-                                        className="w-20 rounded border border-paper-300 bg-paper-50 px-2 py-1 text-[11px] text-ink-900 focus:outline-none focus:ring-1 focus:ring-ochre-500"
-                                      />
-                                      <button
-                                        type="button"
-                                        data-testid={`answer-submit-${question.id}`}
-                                        disabled={busy || decisionBusy}
-                                        onClick={() => {
-                                          const val = answerValues[question.id] ?? "";
-                                          const cl = clauseForAnswer(answerKind, val);
-                                          if (!cl.ok) {
-                                            setError(`追问回答无效：${cl.error}`);
-                                            return;
-                                          }
-                                          const nextTask = appendClause(run.task.text, cl.clause);
-                                          setTask(nextTask);
-                                          void startRun(nextTask);
-                                        }}
-                                        className="rounded bg-ochre-600 px-2 py-1 text-[11px] font-medium text-paper-50 shadow-sm transition hover:bg-ochre-700 active:scale-[0.98] disabled:opacity-50"
-                                      >
-                                        补充并重评
-                                      </button>
-                                    </div>
-                                  )}
-                                </li>
-                              );
-                            })}
+                            {facts.questions.map((question) => (
+                              <li
+                                key={question.id}
+                                className="rounded-lg border border-paper-200/80 bg-paper-50 p-2"
+                              >
+                                <span className="font-medium text-ink-900">{question.ask}</span>
+                                <span className="block text-[11px] text-ink-500 sm:ml-1 sm:inline">
+                                  （{question.why}）
+                                </span>
+                                {followUps.some((item) => item.id === question.id) ? (
+                                  <span className="block text-[11px] text-ochre-500">已在拍板区上方提供填写框。</span>
+                                ) : null}
+                              </li>
+                            ))}
                           </ul>
                         </div>
                       ) : null}
@@ -1838,7 +1841,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                             <span className="text-ink-500">采购：</span>
                             {taskFacts?.buyCents === null ? (
                               <span className="rounded bg-ochre-100 px-1 py-0.5 text-[9.5px] font-normal text-ochre-600 ring-1 ring-inset ring-ochre-500/20">
-                                未提供，演示值
+                                演示值
                               </span>
                             ) : null}
                           </div>
@@ -1853,7 +1856,7 @@ export function AgentOpsConsole(): React.JSX.Element {
                             <span className="text-ink-500">快递：</span>
                             {taskFacts?.shippingCents === null ? (
                               <span className="rounded bg-ochre-100 px-1 py-0.5 text-[9.5px] font-normal text-ochre-600 ring-1 ring-inset ring-ochre-500/20">
-                                未提供，演示值
+                                演示值
                               </span>
                             ) : null}
                           </div>

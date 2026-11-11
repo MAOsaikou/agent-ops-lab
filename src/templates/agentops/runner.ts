@@ -825,7 +825,9 @@ export async function runAgentWorkflow(
         adjudicatedId: decision.recommendedId,
         changed: decision.recommendedId !== state.collaboration.originalRecommendedId,
         summary: "数值初选「" + labelOf(previous) + "」，模型会审后选择「" + labelOf(decision.recommendedId) + "」。" + decision.reason,
-        comparison: state.collaboration.comparison?.map((row) => ({ ...row, selected: row.candidateId === decision.recommendedId })),
+        ...(state.collaboration.comparison === undefined ? {} : {
+          comparison: state.collaboration.comparison.map((row) => ({ ...row, selected: row.candidateId === decision.recommendedId })),
+        }),
         leftoverRisks: state.collaboration.objections.filter((row) => row.targetCandidateId === decision.recommendedId).map((row) => ({
           id: "collab-" + row.checkId + "-" + row.challenger, title: "会签质询 · " + row.title,
           status: row.status, detail: row.detail, owner: "market-analyst",

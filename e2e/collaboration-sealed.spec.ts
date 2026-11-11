@@ -112,6 +112,57 @@ test.describe("Phase 3 & 4: 会签质询与封存态布局", () => {
     await expect(page.getByTestId("three-strategies")).toContainText("已驳回");
   });
 
+  test("Phase 4: 待拍板首屏在 390、390→320 缩窄与直接 320 下都同屏可见：决策摘要、遗留风险、拍板按钮、推荐策略卡", async ({ page }) => {
+    const insideViewport = async (testId: string, label: string): Promise<void> => {
+      const box = await page.getByTestId(testId).first().boundingBox();
+      const height = page.viewportSize()!.height;
+      expect(box, label + " 应已渲染").not.toBeNull();
+      // 元素顶部在视口内，且至少露出 80px（标题与价格行），不是只露一条边。
+      expect(box!.y, label + " 顶部").toBeGreaterThanOrEqual(0);
+      expect(box!.y + Math.min(box!.height, 80), label + " 首屏露出").toBeLessThanOrEqual(height);
+    };
+    const expectFirstScreen = async (): Promise<void> => {
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBe(0);
+      const recommendedId = await page.evaluate(() => {
+        const heading = document.querySelector('[data-testid="decision-overview"]')?.textContent ?? "";
+        return heading.includes("稳价") ? "strategy-profit" : heading.includes("跟价") ? "strategy-match" : "strategy-volume";
+      });
+      await insideViewport("decision-overview", "决策摘要");
+      await insideViewport("approve", "拍板通过");
+      await insideViewport("reject", "驳回");
+      await insideViewport("gate-unresolved-risks", "遗留风险摘要");
+      await insideViewport(recommendedId, "推荐策略卡");
+    };
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await page.getByTestId("task-box").fill(CRAFTED_FLIP_TASK);
+    await page.getByTestId("run-button").click();
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
+      timeout: 30_000,
+    });
+    await expectFirstScreen();
+
+    // 手机上点击运行后页面会重排；必须被带到决策面板，而不是停在页面底部。
+    expect(await page.evaluate(() => window.scrollY)).toBeLessThan(400);
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect.poll(async () => page.evaluate(() => window.innerWidth)).toBe(320);
+    await expectFirstScreen();
+
+    // 直接在 320 宽度开跑同样成立
+    await page.goto("/");
+    await page.getByTestId("task-box").fill(CRAFTED_FLIP_TASK);
+    await page.getByTestId("run-button").click();
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
+      timeout: 30_000,
+    });
+    await expectFirstScreen();
+  });
+
   test("Phase 4: 390px 与 320px 窄屏全流程横向 0 溢出", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");

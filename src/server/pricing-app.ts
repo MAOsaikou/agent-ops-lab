@@ -172,12 +172,19 @@ export function createPricingApp(options: PricingAppOptions): Hono {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
+          // One pre-model snapshot: numeric reports are final before the first model call
+          // (model review when configured, otherwise copy), so the UI can show them while a
+          // slow provider is still in flight. The gate stays locked until the run is saved.
+          let snapshotSent = false;
           const run = await runAgentWorkflow(
             input,
             llmSettings.resolve(),
             (event, snapshot) => {
               controller.enqueue(encoder.encode(formatAgentOpsEvent(event)));
-              if (event.nodeId === "copy" && event.type === "node.output") {
+              const beforeModel = event.type === "review.started"
+                || (event.nodeId === "copy" && event.type === "node.output");
+              if (beforeModel && !snapshotSent) {
+                snapshotSent = true;
                 controller.enqueue(encoder.encode(formatAgentOpsSnapshot(snapshot)));
               }
             },

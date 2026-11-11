@@ -3,7 +3,7 @@ import { Pill } from "./Primitives.js";
 const roles: Readonly<Record<string, string>> = { "procurement-lead": "采购", "pricing-lead": "定价", "growth-operator": "运营", chair: "主持复核" };
 const strategies: Readonly<Record<string, string>> = { profit: "稳价", match: "跟价", volume: "冲量" };
 const stages: Readonly<Record<string, string>> = { proposing: "专业提案中", challenging: "交叉质询中", revising: "定向修订中", completed: "模型会审完成", partial: "部分意见缺失" };
-export function DeliberationBoard({ report, running }: { readonly report?: DeliberationArtifact; readonly running: boolean }): React.JSX.Element | null {
+export function DeliberationBoard({ report, running }: { readonly report: DeliberationArtifact | undefined; readonly running: boolean }): React.JSX.Element | null {
   if (report === undefined) return null;
   const calls = report.nodes.reduce((sum, node) => sum + node.attempts, 0);
   const failed = report.nodes.filter((node) => node.status === "failed").length;

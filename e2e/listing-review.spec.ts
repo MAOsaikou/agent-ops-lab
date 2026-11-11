@@ -121,6 +121,9 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByTestId("strategy-profit")).toBeVisible();
     await expect(page.getByTestId("strategy-match")).toBeVisible();
     await expect(page.getByTestId("strategy-volume")).toBeVisible();
+    // 成本与现金流图表收在折叠项里（保持首屏只留决策），展开后必须可达。
+    await expect(page.getByTestId("cost-details")).not.toHaveAttribute("open", "");
+    await page.getByTestId("cost-details").locator("summary").click();
     await expect(page.locator("svg.recharts-surface").first()).toBeVisible();
     await expect(page.getByTestId("llm-mode-badge")).toContainText(/规则 Harness|模型已启用|模型回退/);
 
@@ -219,6 +222,9 @@ test.describe("上架评审会签台", () => {
     await expect(page.locator("footer > div").first()).not.toContainText("autoApprove");
 
     await page.setViewportSize({ width: 1440, height: 900 });
+    // 首屏只保留决策与「已改 N / 2 轮」摘要；逐轮改了什么在审计折叠项里，展开后可达。
+    await expect(page.getByTestId("review-audit")).not.toHaveAttribute("open", "");
+    await page.getByTestId("review-audit").locator("summary").first().click();
     await expect(page.getByTestId("loop-comparison")).toContainText("已改 2 / 2 轮");
     await expect(page.getByTestId("loop-round-1")).toBeVisible();
     await expect(page.getByTestId("loop-round-2")).toBeVisible();
@@ -293,9 +299,10 @@ test.describe("上架评审会签台", () => {
 
     // 拍板门在 running 阶段必须禁用，文案标明规则初稿，按钮标明暂不可拍板，且不出现封存回放或已拍板封存标识
     await expect(page.getByTestId("approve")).toBeDisabled();
-    await expect(page.getByTestId("approve")).toContainText("暂不可拍板（待文案完成）");
+    await expect(page.getByTestId("approve")).toContainText("暂不可拍板（待评审完成）");
     await expect(page.getByTestId("reject")).toBeDisabled();
-    await expect(page.getByTestId("live-ledger")).toContainText("规则初稿（文案节点完成后定稿）：");
+    // 文案面板（86fbbab 起独立于台账）在文案定稿前必须标明这是本地规则初稿。
+    await expect(page.locator("body")).toContainText("当前先展示本地规则初稿；文案节点完成后更新最终标题与卖点。");
     await expect(page.getByTestId("replay-sealed-button")).toHaveCount(0);
     await expect(page.getByTestId("live-ledger")).not.toContainText("已拍板封存");
     await expect(page.getByTestId("three-strategies")).not.toContainText("已拍板封存");
@@ -310,7 +317,9 @@ test.describe("上架评审会签台", () => {
     await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
     await expect(page.getByTestId("approve")).toBeEnabled();
     await expect(page.getByTestId("approve")).toContainText("拍板通过");
-    await expect(page.getByTestId("live-ledger")).toContainText("主标题初稿：");
+    // 86fbbab 起文案独立成「上架文案」面板；放行后候选标题与带来源标记的卖点必须出现。
+    await expect(page.locator("body")).toContainText("候选标题");
+    await expect(page.locator("body")).toContainText("五条卖点");
     await expect(page.getByTestId("reject")).toBeEnabled();
   });
 
