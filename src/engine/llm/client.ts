@@ -7,6 +7,9 @@ export type LlmRequest = {
   readonly attempt: number;
   readonly prompt: string;
   readonly maxTokens: number;
+  readonly responseFormat?: "json_object";
+  readonly reasoningEffort?: "none" | "low" | "high";
+  readonly timeoutMs?: number;
 };
 
 export type LlmUsage = {

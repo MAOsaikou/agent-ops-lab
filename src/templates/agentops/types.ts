@@ -1,4 +1,5 @@
-import type { Candidate, CandidateId, PlanCopy, ProductInput, UnitCost } from "../pricing/model.js";
+import type { DeliberationArtifact } from "./deliberation.js";
+import type { Candidate, CandidateId, CheckRow, PlanCopy, ProductInput, UnitCost } from "../pricing/model.js";
 
 export const CAPABILITIES = ["planning", "intake", "cost", "market", "risk", "copy", "report", "procure", "price", "promote"] as const;
 
@@ -50,6 +51,11 @@ export type EventType =
   | "gate.decided"
   | "gate.autoApproved"
   | "node.skipped"
+  | "review.started"
+  | "review.retrying"
+  | "review.completed"
+  | "review.failed"
+  | "llm.retrying"
   | "llm.completed"
   | "llm.fallback"
   | "run.paused"
@@ -162,6 +168,50 @@ export type CollaborationArtifact = {
   readonly proposals: readonly CollabProposal[];
   readonly objections: readonly CollabObjection[];
   readonly leftoverRisks: readonly RiskRow[];
+  readonly analyses?: readonly CollabAnalysis[];
+  readonly responses?: readonly CollabResponse[];
+  readonly comparison?: readonly CollabComparison[];
+  readonly consensus?: boolean;
+};
+
+export type CollabAnalysis = {
+  readonly role: CollabRole;
+  readonly roleName: string;
+  readonly scenario: string;
+  readonly inputSummary: string;
+  readonly rows: readonly {
+    readonly candidateId: CandidateId;
+    readonly priceCents: number;
+    readonly margin: number;
+    readonly p10Cents: number;
+    readonly orders: number;
+    readonly stockoutDays: number;
+    readonly minCashCents: number;
+    readonly checks: readonly CheckRow[];
+  }[];
+  readonly proposal: CollabProposal;
+  readonly objections: readonly CollabObjection[];
+};
+
+export type CollabResponse = {
+  readonly challenger: CollabRole;
+  readonly targetCandidateId: CandidateId;
+  readonly checkId: string;
+  readonly owner: string;
+  readonly ownerName: string;
+  readonly disposition: "accepted" | "retained";
+  readonly evidence: string;
+  readonly action: string;
+};
+
+export type CollabComparison = {
+  readonly candidateId: CandidateId;
+  readonly baselineP10Cents: number;
+  readonly stressP10Cents: number;
+  readonly margin: number;
+  readonly failCount: number;
+  readonly warnCount: number;
+  readonly selected: boolean;
 };
 
 export type Artifacts = {
@@ -177,6 +227,7 @@ export type Artifacts = {
   readonly report: readonly string[];
   readonly assumptions: readonly string[];
   readonly collaboration?: CollaborationArtifact | undefined;
+  readonly deliberation?: DeliberationArtifact | undefined;
 };
 
 export type RunStatus = "running" | "awaiting-approval" | "completed" | "rejected";
@@ -266,6 +317,7 @@ export type InternalState = {
   bullets: readonly string[];
   report: string[];
   collaboration?: CollaborationArtifact | undefined;
+  deliberation?: DeliberationArtifact | undefined;
   llm: LlmInfo;
   readonly assumptions: string[];
   readonly verifications: Verification[];

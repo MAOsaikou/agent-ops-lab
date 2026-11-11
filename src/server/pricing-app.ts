@@ -13,6 +13,7 @@ import {
 import { planCsv } from "./plan-csv.js";
 import type { PlanStore } from "./plans.js";
 import { analyzeProductInput } from "../templates/intake/agent.js";
+import { prepareIntake } from "../templates/agentops/preflight.js";
 import { AGENTS, DEFAULT_WORKFLOW, TOOL_CATALOG, WORKFLOW_TEMPLATES } from "../templates/agentops/catalog.js";
 import { DecisionConflictError, isSameDecision, resumeAgentWorkflow, runAgentWorkflow } from "../templates/agentops/runner.js";
 import type { AgentRun, RunEvent } from "../templates/agentops/types.js";
@@ -132,6 +133,13 @@ export function createPricingApp(options: PricingAppOptions): Hono {
       return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
     }
     return c.json(analyzeProductInput(parsed.data));
+  });
+
+  app.post("/api/agentops/intake", async (c) => {
+    const body: unknown = await c.req.json().catch(() => null);
+    const parsed = z.strictObject({ task: z.string().min(1).max(20_000) }).safeParse(body);
+    if (!parsed.success) return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
+    return c.json(await prepareIntake(parsed.data.task, llmSettings.resolve()));
   });
 
   app.get("/api/agentops/catalog", (c) =>

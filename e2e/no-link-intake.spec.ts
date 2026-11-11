@@ -1,6 +1,56 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("Phase 2: 无链接填单与诚实追问", () => {
+  test("先补齐资料和确认假设，再只启动一次评审", async ({ page }) => {
+    let runRequests = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/api/agentops/runs/stream")) runRequests += 1;
+    });
+    await page.goto("/");
+    await page.getByTestId("task-box").fill("商品名：纯棉短袖，竞品价 39.9 元。");
+    await page.getByTestId("prepare-intake").click();
+    await expect(page.getByTestId("preflight-answer-buy")).toBeVisible();
+    await expect(page.getByTestId("preflight-answer-shipping")).toBeVisible();
+    expect(runRequests).toBe(0);
+    await page.getByTestId("preflight-answer-buy").fill("16");
+    await page.getByTestId("preflight-answer-shipping").fill("0");
+    await page.getByTestId("intake-supplement").click();
+    await expect(page.getByTestId("intake-ready")).toBeVisible();
+    await expect(page.getByTestId("intake-start")).toBeDisabled();
+    await page.screenshot({ path: "artifacts/intake-ready.png", fullPage: true });
+    expect(runRequests).toBe(0);
+    await page.getByTestId("intake-confirm").check();
+    await page.getByTestId("intake-start").click();
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
+    expect(runRequests).toBe(1);
+    await expect(page.getByTestId("task-box")).toHaveValue(/快递 0 元/);
+  });
+
+  test("窄屏无链接录入可访问且不横向溢出", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await expect(page.getByLabel("商品名", { exact: false }).first()).toBeVisible();
+    await page.getByTestId("task-box").fill("商品名：纯棉短袖，竞品价 39.9 元。");
+    await page.getByTestId("prepare-intake").click();
+    await expect(page.getByTestId("preflight-answer-buy")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: "artifacts/intake-mobile.png", fullPage: true });
+  });
+
+  test("修改任务后清除旧问题，旧回答不能写入新商品", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("task-box").fill("商品名：纯棉短袖，竞品价 39.9 元。");
+    await page.getByTestId("prepare-intake").click();
+    await expect(page.getByTestId("preflight-answer-buy")).toBeVisible();
+    await page.getByTestId("preflight-answer-buy").fill("16");
+    await page.getByTestId("task-box").fill("商品名：护颈枕，竞品价 89 元，采购价 18 元，快递 7 元。");
+    await expect(page.getByTestId("intake-preflight")).toHaveCount(0);
+    await page.getByTestId("prepare-intake").click();
+    await expect(page.getByTestId("intake-ready")).toBeVisible();
+    await expect(page.getByTestId("intake-preflight")).toContainText("护颈枕");
+    await expect(page.getByTestId("task-box")).not.toHaveValue(/采购价 16 元/);
+  });
+
   test("按项填写表单可以生成任务文本，运行后字段齐备且无缺失追问", async ({ page }) => {
     await page.goto("/");
     // 打开无链接按项填写折叠面板
@@ -55,4 +105,16 @@ test.describe("Phase 2: 无链接填单与诚实追问", () => {
     // 任务框里已追加采购价
     await expect(page.getByTestId("task-box")).toHaveValue(/采购价 18.5 元/);
   });
+});
+
+
+test("助手补答可以纠正原描述中无效的参考售价", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("task-box").fill("商品名：纯棉短袖，采购价 16 元，快递 0 元，竞品价 0.01 元。");
+  await page.getByTestId("prepare-intake").click();
+  await expect(page.getByTestId("preflight-answer-competitor")).toBeVisible();
+  await page.getByTestId("preflight-answer-competitor").fill("39.9");
+  await page.getByTestId("intake-supplement").click();
+  await expect(page.getByTestId("intake-ready")).toBeVisible();
+  await expect(page.getByTestId("intake-preflight")).toContainText("39.90 元");
 });

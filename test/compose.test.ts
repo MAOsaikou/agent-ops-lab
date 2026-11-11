@@ -31,7 +31,7 @@ describe("Phase 2: 无链接填单与诚实追问", () => {
       name: "枕头",
       competitorYuan: "-5",
       buyYuan: "abc",
-      shippingYuan: "0",
+      shippingYuan: "-1",
     });
     expect(badResult.ok).toBe(false);
     if (!badResult.ok) {

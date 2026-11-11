@@ -43,6 +43,13 @@ export function fetchAgentCatalog(): Promise<AgentCatalog> {
   return request<AgentCatalog>("/api/agentops/catalog");
 }
 
+export function prepareMerchantIntake(task: string, signal?: AbortSignal): Promise<import("../../../src/templates/agentops/preflight.js").Preflight> {
+  return request("/api/agentops/intake", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
 export async function fetchAgentRuns(): Promise<readonly RunSummary[]> {
   return (await request<{ runs: readonly RunSummary[] }>("/api/agentops/runs")).runs;
 }

@@ -198,6 +198,13 @@ test.describe("上架评审会签台", () => {
     expect(mobileMeasures.reject?.bottom).toBeLessThanOrEqual(844);
     expect(mobileMeasures.strategyMatch?.bottom).toBeLessThanOrEqual(844);
 
+    await page.screenshot({ path: "artifacts/review-mobile.png" });
+    const riskDetails = page.getByTestId("gate-unresolved-risks");
+    await expect(riskDetails.locator("summary")).toContainText("需修正");
+    await riskDetails.locator("summary").click();
+    await expect(riskDetails).toHaveAttribute("open", "");
+    await riskDetails.locator("summary").click();
+
     // 320px 超窄屏同样保持横向 0 溢出（视口刚缩小后需等 layout 完成，避免量到上一宽度的残留）
     await page.setViewportSize({ width: 320, height: 568 });
     await expect

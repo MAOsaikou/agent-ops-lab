@@ -1,3 +1,4 @@
+import { runDeliberation } from "./deliberation.js";
 import { sha256Hex } from "../../engine/hash.js";
 import { parseRunId } from "../../engine/ids.js";
 import { canonicalJson } from "../../engine/json.js";
@@ -11,7 +12,7 @@ import { normalizeInput, recommendId } from "../pricing/plan.js";
 import { PLATFORM_PRESETS } from "../pricing/platform.js";
 import { simulate } from "../pricing/simulate.js";
 import { AGENTS, AGENTS_V1, COLLAB_WORKFLOW, DEFAULT_WORKFLOW, resolveAgent } from "./catalog.js";
-import { runCollaboration } from "./collaboration.js";
+import { adjudicateCollaboration, analyzeCollaborationRole, respondToObjections } from "./collaboration.js";
 import { parseTaskFacts } from "./task-facts.js";
 import type { LiveLlm } from "./llm.js";
 import { copyPrompt, validateCopy } from "./llm.js";
@@ -160,7 +161,12 @@ function dispatch(
   iteration: number,
   emit?: EmitEvent,
 ): string {
-  const selected = resolveAgent(capability, state.loads, state.failures, state.calls, state.agents);
+  // Specialists reserve their bounded calls for their own reports; general audit belongs
+  // to risk/accounting, otherwise a risk fallback can starve the next report iteration.
+  const eligibleAgents = capability !== "procure" && capability !== "price" && capability !== "promote"
+    ? state.agents.filter((agent) => agent.id !== "procurement-lead" && agent.id !== "pricing-lead" && agent.id !== "growth-operator")
+    : state.agents;
+  const selected = resolveAgent(capability, state.loads, state.failures, state.calls, eligibleAgents);
   const chosen = selected.agent;
   const candidates = selected.scores.map(({ agent, score }) => ({
     agentId: agent.id,
@@ -324,63 +330,46 @@ function ownerForCheck(checkId: string): string {
 }
 
 function executeChallenge(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
-  const agent = dispatch(state, events, "challenge", "risk", "三方质询与会签交叉复核", iteration, emit);
-  if (state.product === null || state.candidates.length === 0) {
-    return;
-  }
+  if (state.product === null || state.candidates.length === 0) return;
   const originalRecommendedId = (state.chosenId as CandidateId) ?? "match";
-  const collab = runCollaboration(state.product, state.candidates, originalRecommendedId);
-  runTool(
-    events,
-    "challenge",
-    "pricing.simulate",
-    agent,
-    "采购负责人、定价参谋与推广运营各自带入利益人透镜核算候选方案",
-    emit,
-  );
-  runTool(
-    events,
-    "challenge",
-    "pricing.verify",
-    agent,
-    "对各方提议方案进行交叉质询与反向压力测试",
-    emit,
-  );
-  for (const proposal of collab.proposals) {
-    addEvent(
-      events,
-      "node.output",
-      `会签提议：${proposal.roleName}`,
-      `提议「${proposal.candidateLabel}」：${proposal.rationale}（${proposal.metricName}：${proposal.metricValue}）`,
-      "challenge",
-      proposal.role,
-      emit,
-    );
+  const roles = [
+    { role: "procurement-lead", capability: "procure", tool: "pricing.simulate" },
+    { role: "pricing-lead", capability: "price", tool: "pricing.verify" },
+    { role: "growth-operator", capability: "promote", tool: "pricing.simulate" },
+  ] as const;
+  const analyses = roles.map(({ role, capability, tool }) => {
+    const nodeId = `challenge-${role}`;
+    const agent = dispatch(state, events, nodeId, capability, "接收会计成本和市场三套报价，独立重算", iteration, emit);
+    const analysis = analyzeCollaborationRole(role, state.product!, state.candidates);
+    runTool(events, nodeId, tool, agent, `${analysis.scenario}；${analysis.inputSummary}；逐策略复核毛利、p10、订单与备货资金`, emit);
+    addEvent(events, "node.output", `独立分析交付：${analysis.roleName}`,
+      `${analysis.scenario}；${analysis.rows.map((r) => `${r.candidateId}：毛利${pct(r.margin)} / p10 ${money(r.p10Cents)} / 日单${r.orders.toFixed(1)} / 缺货${String(r.stockoutDays)}天`).join("；")}`,
+      nodeId, agent, emit);
+    addEvent(events, "node.output", `会签提议：${analysis.roleName}`,
+      `提议「${analysis.proposal.candidateLabel}」：${analysis.proposal.rationale}`, nodeId, agent, emit);
+    return analysis;
+  });
+  // Market owns the quotes; consume each objection before handing complete reports to risk.
+  // This is part of its existing invocation, rather than a second unrelated role attribution.
+  const marketAgent = [...state.dispatches].reverse().find((d) => d.nodeId === "market")?.chosen ?? "market-analyst";
+  const responses = respondToObjections(state.candidates, analyses).map((response) => ({
+    ...response, owner: marketAgent, ownerName: state.agents.find((a) => a.id === marketAgent)?.name ?? "市场分析师",
+  }));
+  runTool(events, "challenge-response", "pricing.verify", marketAgent, "报价责任人对照原报价与每条情景质询的数值证据；接收失败项不意味着已修复", emit);
+  for (const response of responses) {
+    addEvent(events, "node.output", `质询回应：${response.ownerName}`,
+      `${response.challenger} → ${response.targetCandidateId} / ${response.checkId}；${response.evidence}；${response.action}`,
+      "challenge-response", marketAgent, emit);
   }
-  addEvent(
-    events,
-    "node.output",
-    "三方交叉质询记录",
-    `共提出 ${String(collab.objections.length)} 项质询意见，其中 ${String(collab.objections.filter((o) => o.status === "fail").length)} 项为阻断性质询`,
-    "challenge",
-    agent,
-    emit,
-  );
-  addEvent(events, "node.output", "风控裁决结论", collab.summary, "challenge", agent, emit);
-
+  const agent = dispatch(state, events, "challenge", "risk", "消费三方独立报告与报价责任人的逐项回应并裁决", iteration, emit);
+  const collab = adjudicateCollaboration(state.product, state.candidates, originalRecommendedId, analyses, responses);
+  runTool(events, "challenge", "pricing.verify", agent, "按失败质询数、基准 p10 和原推荐顺序裁决；未解决失败项保留 fail", emit);
   state.chosenId = collab.adjudicatedId;
   state.preferredCandidateId = collab.adjudicatedId;
   state.collaboration = collab;
-
-  if (collab.changed && state.facts !== null) {
-    const buyQ = state.facts.questions.find((q) => q.id === "ask-buy");
-    if (buyQ !== undefined && state.product !== null) {
-      const thresholdCents = Math.round(state.product.buyCents * 1.1);
-      (buyQ as { why: string }).why = `会签质询触发策略调整：采购价若高于 ${money(thresholdCents)} 将导致原推荐方案破保本，请核实真实进货成本。`;
-    }
-  }
+  addEvent(events, "node.output", "三方交叉质询记录", `共提出 ${String(collab.objections.length)} 项质询，均有报价责任人回应；接收不等于风险消除`, "challenge", agent, emit);
+  addEvent(events, "node.output", "风控裁决结论", collab.summary, "challenge", agent, emit);
 }
-
 function executeRisk(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): readonly Verification[] {
   const agent = dispatch(state, events, "risk", "risk", "独立验证成本、需求和策略", iteration, emit);
   const chosen = state.candidates.find((candidate) => candidate.id === state.chosenId) ?? state.candidates[0];
@@ -565,12 +554,8 @@ function planAdjustment(state: InternalState, nextIteration: number): PlannedAdj
 }
 
 async function executeCopy(
-  state: InternalState,
-  events: RunEvent[],
-  iteration: number,
-  runId: string,
-  live: LiveLlm | null,
-  emit?: EmitEvent,
+  state: InternalState, events: RunEvent[], iteration: number, runId: string,
+  live: LiveLlm | null, emit?: EmitEvent,
 ): Promise<AgentRun["llm"]> {
   const agent = dispatch(state, events, "copy", "copy", "生成平台上架文案", iteration, emit);
   const candidate = state.candidates.find((item) => item.id === state.chosenId) ?? state.candidates[0];
@@ -578,100 +563,37 @@ async function executeCopy(
   const preset = PLATFORM_PRESETS[state.product.platform];
   state.copy = buildCopy(state.product, preset, candidate.priceCents, state.breakEvenCents);
   state.bullets = candidate.bullets.map((bullet) => bullet.text);
-  runTool(
-    events,
-    "copy",
-    "copy.generate",
-    agent,
-    `${String(state.copy.titles.length)} 个标题，${String(state.bullets.length)} 条卖点；带需确认标记`,
-    emit,
-  );
-  addEvent(
-    events,
-    "node.output",
-    "文案 Agent 提交候选内容",
-    `标题受 ${String(preset.titleMax)} 字限制；不写入未验证的销量或极限词`,
-    "copy",
-    agent,
-    emit,
-  );
-  if (live === null) {
-    state.llm = RULE_LLM;
-    return RULE_LLM;
-  }
-  try {
-    const completion = await live.client.complete({
-      runId: parseRunId(runId),
-      round: 1,
-      nodeId: "copy",
-      attempt: 1,
-      prompt: copyPrompt({
-        name: state.product.name,
-        platform: preset.label,
-        maxTitle: preset.titleMax,
-        keywords: state.product.keywords,
-        price: candidate.priceCents,
-      }),
-      maxTokens: 400,
-    });
-    const checked = validateCopy(completion.text, preset.titleMax);
-    if (!checked.ok) {
-      const fallbackLlm: AgentRun["llm"] = {
-        mode: "fallback",
-        model: live.model,
-        note: `${checked.reason}。已回退到规则文案，验证器拒绝不合约输出。`,
-      };
-      state.llm = fallbackLlm;
-      addEvent(
-        events,
-        "llm.fallback",
-        "模型输出未通过验证，回退规则文案",
-        `${checked.reason}；由 copywriter 的确定性规则兜底`,
-        "copy",
-        agent,
-        emit,
-      );
-      return fallbackLlm;
+  runTool(events, "copy", "copy.generate", agent, "根据最终报价与已提供事实准备文案，保留本地初稿直至模型校验完成", emit);
+  addEvent(events, "node.output", live === null ? "文案 Agent 提交候选内容" : "文案 Agent 已接收最终方案",
+    "标题受 " + String(preset.titleMax) + " 字限制；不写未验证的销量或极限词", "copy", agent, emit);
+  if (live === null) { state.llm = RULE_LLM; return RULE_LLM; }
+  const prompt = copyPrompt({ name: state.product.name, platform: preset.label,
+    maxTitle: preset.titleMax, keywords: state.product.keywords, price: candidate.priceCents });
+  let reason = "模型未完成";
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const completion = await live.client.complete({
+        runId: parseRunId(runId), round: iteration, nodeId: "copy", attempt,
+        prompt: prompt + (attempt === 2 ? "\n上次失败原因：" + reason + "。请修正后只返回规定 JSON。" : ""),
+        maxTokens: 1200, responseFormat: "json_object", reasoningEffort: "none", timeoutMs: 45_000,
+      });
+      const checked = validateCopy(completion.text, preset.titleMax);
+      if (!checked.ok) throw new Error(checked.reason);
+      state.copy = { ...state.copy, titles: checked.value.titles.map((text) => ({ label: live.model, text, length: [...text].length })) };
+      state.bullets = checked.value.bullets;
+      state.llm = { mode: "live", model: live.model, note: "模型文案已通过结构、字数和风险词检查；数值核算仍由本地工具执行。" };
+      addEvent(events, "llm.completed", "模型完成文案节点", live.model + " 生成 " + String(checked.value.titles.length) + " 个标题、" + String(checked.value.bullets.length) + " 条卖点，校验通过", "copy", agent, emit);
+      return state.llm;
+    } catch (error) {
+      reason = error instanceof Error ? error.message : "模型调用异常";
+      if (attempt === 1 && !/HTTP (?:401|403)/.test(reason)) {
+        addEvent(events, "llm.retrying", "文案校验后请求修订", reason + "；携带具体错误重新生成，最多重试一次", "copy", agent, emit);
+      } else break;
     }
-    state.copy = {
-      ...state.copy,
-      titles: checked.value.titles.map((text) => ({ label: live.model, text, length: [...text].length })),
-    };
-    state.bullets = checked.value.bullets;
-    const liveLlm: AgentRun["llm"] = {
-      mode: "live",
-      model: live.model,
-      note: "模型负责文案内容，调度与验证仍由本地 Harness 执行，输出经校验后才进入结果。",
-    };
-    state.llm = liveLlm;
-    addEvent(
-      events,
-      "llm.completed",
-      "模型完成文案节点",
-      `${live.model} 生成 ${String(checked.value.titles.length)} 个标题、${String(checked.value.bullets.length)} 条卖点，已通过长度与风险词校验`,
-      "copy",
-      agent,
-      emit,
-    );
-    return liveLlm;
-  } catch (error) {
-    const fallbackLlm: AgentRun["llm"] = {
-      mode: "fallback",
-      model: live.model,
-      note: "模型调用失败，已回退到可复现的规则文案。",
-    };
-    state.llm = fallbackLlm;
-    addEvent(
-      events,
-      "llm.fallback",
-      "模型调用失败，回退规则文案",
-      error instanceof Error ? error.message : "模型调用异常",
-      "copy",
-      agent,
-      emit,
-    );
-    return fallbackLlm;
   }
+  state.llm = { mode: "fallback", model: live.model, note: reason + "。文案未采用模型结果，保留本地初稿。" };
+  addEvent(events, "llm.fallback", "文案模型未完成", reason + "；已保留本地初稿", "copy", agent, emit);
+  return state.llm;
 }
 
 function executeReport(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
@@ -682,6 +604,10 @@ function executeReport(state: InternalState, events: RunEvent[], iteration: numb
     `推荐策略：${candidate?.label ?? "待确认"}，建议价 ${candidate === undefined ? "—" : money(candidate.priceCents)}`,
     `验证结论：${state.risk?.level ?? "未完成"}；Self-Loop 次数：${String(state.loops.length)}`,
     `证据边界：${String(state.facts?.questions.length ?? 0)} 项信息仍需要人工确认，系统没有将其伪装成已抓取事实。`,
+      ...(state.collaboration ? [
+        `会签裁决：${state.collaboration.summary}`,
+        `协作证据：引用最终当前轮的三方规则分析与逐项回应；未消除失败项 ${String(state.collaboration.leftoverRisks.filter((row) => row.status === "fail").length)} 项。压力情景是规则假设，不是外部模型或实测市场结果。`,
+      ] : []),
     ...state.assumptions,
   ];
   runTool(events, "report", "report.compile", agent, "合并 Agent 输出、验证记录、调整原因和未解决问题", emit);
@@ -709,6 +635,7 @@ function artifacts(state: InternalState): Artifacts {
     report: state.report,
     assumptions: state.assumptions,
     ...(state.collaboration ? { collaboration: state.collaboration } : {}),
+    ...(state.deliberation ? { deliberation: state.deliberation } : {}),
   };
 }
 
@@ -776,6 +703,7 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
     bullets: [...run.artifacts.bullets],
     report: [...run.artifacts.report],
     collaboration: run.artifacts.collaboration,
+    deliberation: run.artifacts.deliberation,
     llm: run.llm,
     assumptions: [...run.artifacts.assumptions],
     verifications: [...run.verifications],
@@ -793,6 +721,7 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
 
 export type WorkflowRunOptions = {
   readonly collaboration?: boolean | undefined;
+  readonly modelReview?: boolean | undefined;
 };
 
 export async function runAgentWorkflow(
@@ -802,7 +731,14 @@ export async function runAgentWorkflow(
   options?: WorkflowRunOptions,
 ): Promise<AgentRun> {
   const enableCollaboration = options?.collaboration ?? true;
-  const workflow = enableCollaboration ? COLLAB_WORKFLOW : DEFAULT_WORKFLOW;
+  const modelReview = enableCollaboration && live !== null && options?.modelReview !== false;
+  const workflow: WorkflowDocument = modelReview ? {
+    ...COLLAB_WORKFLOW, id: "product-launch-review.v3", title: "商品上架评审 · 模型协作会审",
+    nodes: COLLAB_WORKFLOW.nodes.flatMap((node) => node.id === "copy" ? [
+      { kind: "agent" as const, id: "model-review", capability: "risk" as const, title: "三方模型提案、主席质询和定向修订", dependsOn: ["risk-gate"] },
+      { ...node, dependsOn: ["model-review"] },
+    ] : [node]),
+  } : enableCollaboration ? COLLAB_WORKFLOW : DEFAULT_WORKFLOW;
   const agents = enableCollaboration ? AGENTS : AGENTS_V1;
   const state = initialState(input.taskText, input.autoApprove, agents);
   const events: RunEvent[] = [];
@@ -817,14 +753,14 @@ export async function runAgentWorkflow(
 
   addEvent(events, "run.started", "任务开始", `工作流 ${workflow.title} · 目标：${workflow.intent}`, null, "planner", emit);
   const planner = dispatch(state, events, "plan", "planning", "理解任务并生成执行计划", 1, emit);
-  runTool(events, "plan", "workflow.plan", planner, "确定并行分析、验证门和最多 2 轮额外 Self-Loop 修正", emit);
+  runTool(events, "plan", "workflow.plan", planner, "确定交付依赖、验证门和最多 2 轮额外 Self-Loop 修正", emit);
   addEvent(
     events,
     "node.output",
     "规划 Agent 提交执行图",
     enableCollaboration
-      ? "研究 → 成本/市场并行 → 三方质询复核 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验"
-      : "研究 → 成本/市场并行 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验",
+      ? "研究 → 成本会计 → 市场报价 → 三方独立分析 → 责任人回应 → 风控裁决 → 反馈循环 → 人工门 → 报告 → 最终校验"
+      : "研究 → 成本会计 → 市场报价 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验",
     "plan",
     planner,
     emit,
@@ -866,6 +802,38 @@ export async function runAgentWorkflow(
     });
     lastRiskVerdicts = retryVerdicts;
     iteration = nextIteration;
+  }
+
+  // Model review consumes the final numeric reports once; economic repair loops do not multiply model calls.
+  if (modelReview && live !== null && state.product !== null && state.collaboration !== undefined) {
+    state.deliberation = await runDeliberation({ runId: input.id, round: iteration,
+      product: state.product, candidates: state.candidates, collaboration: state.collaboration, live,
+      onUpdate: (artifact, update) => {
+        state.deliberation = artifact;
+        const type: RunEvent["type"] = update.type === "finished" ? "node.output" : ("review." + update.type) as RunEvent["type"];
+        addEvent(events, type, update.type === "finished" ? "模型会审汇总完成" : "模型会审 · " + update.nodeId,
+          update.detail, update.nodeId, update.role === "chair" ? "risk-auditor" : update.role, emit);
+      },
+    });
+    const decision = state.deliberation.decision;
+    if (decision !== null) {
+      const previous = state.collaboration.adjudicatedId;
+      state.chosenId = decision.recommendedId;
+      state.preferredCandidateId = decision.recommendedId;
+      const labelOf = (id: string): string => state.candidates.find((item) => item.id === id)?.label ?? id;
+      state.collaboration = { ...state.collaboration,
+        adjudicatedId: decision.recommendedId,
+        changed: decision.recommendedId !== state.collaboration.originalRecommendedId,
+        summary: "数值初选「" + labelOf(previous) + "」，模型会审后选择「" + labelOf(decision.recommendedId) + "」。" + decision.reason,
+        comparison: state.collaboration.comparison?.map((row) => ({ ...row, selected: row.candidateId === decision.recommendedId })),
+        leftoverRisks: state.collaboration.objections.filter((row) => row.targetCandidateId === decision.recommendedId).map((row) => ({
+          id: "collab-" + row.checkId + "-" + row.challenger, title: "会签质询 · " + row.title,
+          status: row.status, detail: row.detail, owner: "market-analyst",
+        })),
+      };
+      // A changed model preference receives a fresh independent numerical check.
+      if (previous !== decision.recommendedId) executeRisk(state, events, iteration, emit);
+    }
   }
 
   const llm = await executeCopy(state, events, iteration, input.id, live, emit);
@@ -1016,7 +984,7 @@ function finalize(
     fingerprint,
     notes: [
       "商品链接识别是工具，不是 Agent 本身；每个 Agent 都有独立角色、工具、输出和验证责任。",
-      "并行节点 account / market 由调度器分别选择 Agent；经济类风险失败最多触发 2 轮额外反馈循环（共最多 3 轮验证）。",
+      "成本先交付保本价，市场据此报价；三方独立复核后交风控裁决。经济类风险失败最多触发 2 轮额外反馈循环（共最多 3 轮验证）。",
       "人工门在正式模式需要用户确认，autoApprove 仅用于可重复演示。",
     ],
     gateDecision: state.gateDecision,

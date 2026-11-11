@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { DEFAULT_WORKFLOW } from "../src/templates/agentops/catalog.js";
-import { runCollaboration } from "../src/templates/agentops/collaboration.js";
+import { adjudicateCollaboration, runCollaboration } from "../src/templates/agentops/collaboration.js";
 import { resumeAgentWorkflow, runAgentWorkflow } from "../src/templates/agentops/runner.js";
 import { buildCandidates } from "../src/templates/pricing/candidates.js";
 import { normalizeInput } from "../src/templates/pricing/plan.js";
@@ -14,7 +14,7 @@ const PRESET_2 =
   "评估护颈枕价格与现金流。京东价 ¥89，竞品日单量约 50，采购 18 元，包装 2 元，快递 7 元，平台费率按默认，目标毛利 30%，预算 500 元。";
 
 const CRAFTED_FLIP_TASK =
-  "评估京东商品是否值得上架：https://item.jd.com/100012345678.html。商品名：便携保温杯，京东价 ¥58.90，日单量 50，采购价 16 元，包材 1.5 元，快递 6.5 元，目标毛利 56%，推广预算 10 元，可周转资金 2200 元。";
+  "评估京东商品是否值得上架。商品名：便携保温杯，京东价 ¥58.9，日单量 50，采购价 16 元，包材 1.5 元，快递 6.5 元，目标毛利 56%，推广预算 10 元，可周转资金 2200 元。";
 
 describe("Phase 3: 会签质询与利益人交叉复核机制 (Collaboration)", () => {
   test("三方利益人透镜核算与冲突识别：采购看悲观p10、定价看硬门槛毛利、运营看放量单量", () => {
@@ -104,6 +104,14 @@ describe("Phase 3: 会签质询与利益人交叉复核机制 (Collaboration)", 
 
     // 最终选中的策略是稳健的稳价方案
     expect(v2Run.artifacts.chosenId).toBe("profit");
+    // No baseline loop did the work for collaboration: compare identical input in one round.
+    expect(v1Run.loops).toHaveLength(0);
+    expect(v2Run.loops).toHaveLength(0);
+    expect(collab.originalRecommendedId).toBe("match");
+    expect(collab.comparison?.find((row) => row.candidateId === "match")?.failCount).toBe(2);
+    expect(collab.comparison?.find((row) => row.candidateId === "profit")?.failCount).toBe(0);
+    expect(collab.comparison?.find((row) => row.candidateId === "profit")?.baselineP10Cents)
+      .toBeLessThan(collab.comparison!.find((row) => row.candidateId === "match")!.baselineP10Cents);
   });
 
   test("在一致或低冲突任务上，三方一致达成共识且不出假分歧", async () => {
@@ -194,4 +202,73 @@ describe("Phase 3: 会签质询与利益人交叉复核机制 (Collaboration)", 
       expect(resumed.events[i]?.prevHash).toBe(resumed.events[i - 1]?.hash);
     }
   });
-});
+  test("每个专家真实调度并交付独立数值报告，报价责任人回应后才裁决", async () => {
+    const run = await runAgentWorkflow({ id: "handoff-evidence", taskText: CRAFTED_FLIP_TASK, autoApprove: false, createdAt: "2026-01-01T00:00:00.000Z" });
+    const collab = run.artifacts.collaboration!;
+    expect(collab.analyses).toHaveLength(3);
+    for (const role of ["procurement-lead", "pricing-lead", "growth-operator"] as const) {
+      expect(run.calls[role]).toBe(1);
+      expect(run.dispatches.find((d) => d.nodeId === `challenge-${role}`)?.chosen).toBe(role);
+      expect(run.events.some((e) => e.type === "tool.called" && e.agentId === role)).toBe(true);
+      const report = collab.analyses!.find((a) => a.role === role)!;
+      expect(report.rows).toHaveLength(3);
+      for (const row of report.rows) {
+        expect(row.checks.map((c) => c.id)).toEqual(expect.arrayContaining(["break-even", "margin", "cashflow"]));
+        expect(Number.isFinite(row.p10Cents)).toBe(true);
+      }
+    }
+    const baseline = collab.analyses!.find((a) => a.role === "pricing-lead")!;
+    for (const row of baseline.rows) {
+      const cand = run.artifacts.candidates!.find((c) => c.id === row.candidateId)!;
+      expect(row.p10Cents).toBe(cand.sim.p10Cents);
+      expect(row.margin).toBe(cand.evaluation.daily.margin);
+    }
+    expect(collab.responses).toHaveLength(collab.objections.length);
+    for (const objection of collab.objections) {
+      const response = collab.responses!.find((r) => r.challenger === objection.challenger && r.targetCandidateId === objection.targetCandidateId && r.checkId === objection.checkId)!;
+      expect(response.owner).toBe("market-analyst");
+      expect(response.evidence).toContain("基准毛利");
+      expect(response.action).toContain("风控");
+    }
+    const responseEvents = run.events.filter((e) => e.nodeId === "challenge-response");
+    const adjudication = run.events.find((e) => e.nodeId === "challenge" && e.title === "风控裁决结论")!;
+    expect(responseEvents.length).toBeGreaterThan(0);
+    expect(responseEvents.every((e) => e.seq < adjudication.seq)).toBe(true);
+    expect(run.workflow.nodes.find((n) => n.id === "market")?.dependsOn).toEqual(["account"]);
+  });
+
+  test("裁决拒绝缺失独立报告，报告中的质询真实改变裁决且不修改输入", async () => {
+    const run = await runAgentWorkflow({ id: "analysis-contract", taskText: CRAFTED_FLIP_TASK, autoApprove: false, createdAt: "2026-01-01T00:00:00.000Z" });
+    const product = run.artifacts.product!;
+    const candidates = run.artifacts.candidates!;
+    const analyses = run.artifacts.collaboration!.analyses!;
+    const original = JSON.stringify({ product, candidates, analyses });
+    expect(() => adjudicateCollaboration(product, candidates, "match", analyses.slice(1))).toThrow("each specialist");
+    // Controlled ablation: same prices/simulation, but with no specialist objections.
+    const withoutChallenges = analyses.map((a) => ({ ...a, objections: [] }));
+    expect(adjudicateCollaboration(product, candidates, "match", withoutChallenges).adjudicatedId).toBe("match");
+    expect(adjudicateCollaboration(product, candidates, "match", analyses).adjudicatedId).toBe("profit");
+    expect(JSON.stringify({ product, candidates, analyses })).toBe(original);
+  });
+
+  test("失败质询在回应后仍保持fail，最坏三轮不耗尽专业分析与最终风控预算", async () => {
+    const run = await runAgentWorkflow({ id: "fail-preserved", taskText: PRESET_2, autoApprove: true, createdAt: "2026-01-01T00:00:00.000Z" });
+    const collab = run.artifacts.collaboration!;
+    const failed = collab.objections.filter((o) => o.status === "fail" && o.targetCandidateId === collab.adjudicatedId);
+    expect(failed.length).toBeGreaterThan(0);
+    for (const objection of failed) {
+      const risk = collab.leftoverRisks.find((r) => r.id === `collab-${objection.checkId}-${objection.challenger}`);
+      expect(risk?.status).toBe("fail");
+    }
+    expect(run.artifacts.risk?.level).toBe("fail");
+    expect(run.status).toBe("completed"); // autoApprove records the unresolved risk; it does not hide it.
+    for (const agent of run.agents) expect(run.calls[agent.id] ?? 0).toBeLessThanOrEqual(agent.maxCallsPerRun);
+  });  test("用户提供零需求且不开推广时，采购压力不能凭空生成一单需求", async () => {
+    const run = await runAgentWorkflow({ id: "zero-demand", taskText: CRAFTED_FLIP_TASK, autoApprove: false, createdAt: "2026-01-01T00:00:00.000Z" });
+    const product = { ...run.artifacts.product!, marketOrders: 0, adDailyBudgetCents: 0 };
+    const candidates = buildCandidates(product, PLATFORM_PRESETS[product.platform]);
+    const collab = runCollaboration(product, candidates, "match");
+    const procurement = collab.analyses!.find((a) => a.role === "procurement-lead")!;
+    expect(procurement.inputSummary).toContain("竞品日单量 0");
+    expect(procurement.rows.every((r) => r.orders === 0)).toBe(true);
+  });});
