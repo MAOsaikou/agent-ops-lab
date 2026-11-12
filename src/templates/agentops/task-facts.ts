@@ -14,6 +14,8 @@ export type TaskFacts = {
   readonly marketOrders: number | null;
   readonly targetMargin: number | null;
   readonly promoDiscount: number | null;
+  readonly returnRate: number | null;
+  readonly returnSalvage: number | null;
 };
 
 function yuanOf(text: string, pattern: RegExp, allowZero = false): number | null {
@@ -39,20 +41,40 @@ function parsePromoDiscount(text: string): number | null {
   return null;
 }
 
+function parsePercent(text: string, pattern: RegExp, min: number, max: number): number | null {
+  const match = pattern.exec(text);
+  if (match?.[1] === undefined) return null;
+  const value = Number(match[1]) / 100;
+  if (!Number.isFinite(value) || value < min || value > max) return null;
+  return Number(value.toFixed(4));
+}
+
 export function parseTaskFacts(text: string): TaskFacts {
   const marginMatch = /(?:目标\s*毛利|毛利(?:率)?|利润率)\s*[:：]?\s*(\d{1,2}(?:\.\d)?)\s*%/i.exec(text);
   const orderMatch = /(?:竞品\s*)?(?:日单量|日销|日均|每天)\s*[:：]?\s*约?\s*(\d{1,7})(?![\d.])/.exec(text);
   const marginValue = marginMatch?.[1] === undefined ? null : Number(marginMatch[1]) / 100;
   const orderValue = orderMatch?.[1] === undefined ? null : Number(orderMatch[1]);
   return {
-    buyCents: yuanOf(text, /(?:采购价?|进货价?|拿货价?)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/),
+    buyCents: yuanOf(
+      text,
+      /(?:采购成本|进货成本|采购价|进货价|拿货价|采购|进货|拿货)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/,
+    ),
     packagingCents: yuanOf(text, /(?:包材|包装)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/, true),
     shippingCents: yuanOf(text, /(?:快递|运费|物流)\s*[:：]?\s*(\d{1,6}(?:\.\d{1,2})?)\s*元/, true),
     adDailyBudgetCents: yuanOf(text, /(?:推广预算|日预算|投放预算|预算)\s*[:：]?\s*(\d{1,7}(?:\.\d{1,2})?)\s*元/, true),
-    cashCents: yuanOf(text, /(?:可周转资金|周转金|备货资金)\s*[:：]?\s*(\d{1,8}(?:\.\d{1,2})?)\s*元/, true),
-    competitorCents: yuanOf(text, /(?:竞品(?:主流)?价|京东价|售价)\s*[:：]?\s*[¥￥]?\s*(\d{1,6}(?:\.\d{1,2})?)/),
+    cashCents: yuanOf(
+      text,
+      /(?:可周转资金|可周转金|周转金|备货资金)\s*(?:仅|只有|仅有)?\s*[:：]?\s*(\d{1,8}(?:\.\d{1,2})?)\s*元/,
+      true,
+    ),
+    competitorCents: yuanOf(
+      text,
+      /(?:竞品(?:主流)?价|竞品售价|竞品卖|京东价|售价|竞品)\s*[:：]?\s*[¥￥]?\s*(\d{1,6}(?:\.\d{1,2})?)/,
+    ),
     marketOrders: orderValue !== null && Number.isFinite(orderValue) && orderValue <= 1_000_000 ? orderValue : null,
     targetMargin: marginValue !== null && marginValue >= 0.02 && marginValue <= 0.6 ? marginValue : null,
     promoDiscount: parsePromoDiscount(text),
+    returnRate: parsePercent(text, /(?:行业)?退货率\s*[:：]?\s*(\d{1,2}(?:\.\d)?)\s*%/, 0, 0.95),
+    returnSalvage: parsePercent(text, /残值(?:仅)?\s*[:：]?\s*(\d{1,2}(?:\.\d)?)\s*%/, 0, 1),
   };
 }

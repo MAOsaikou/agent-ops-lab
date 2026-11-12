@@ -71,7 +71,7 @@ describe("pricing api", () => {
     const created = await app.request("/api/agentops/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task: "请分析拼多多商品是否值得上架，并验证风险。", autoApprove: true }),
+      body: JSON.stringify({ task: "分析拼多多女装纯棉短袖上架可行性。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品价 39.9 元，日单量 50，目标毛利 25%，预算 30 元，周转金 3000 元。", autoApprove: true }),
     });
     expect(created.status).toBe(201);
     const run = (await created.json()) as { id: string; status: string; dispatches: readonly unknown[]; events: readonly unknown[]; fingerprint: string };

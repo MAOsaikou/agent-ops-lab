@@ -36,8 +36,10 @@ import {
   type ComposeForm,
 } from "../../../src/templates/agentops/compose.js";
 import { MerchantIntake } from "./MerchantIntake.js";
+import { isClarifyRun, isSystemReject, presentRun } from "../../../src/templates/agentops/demo-view.js";
 import { parseTaskFacts } from "../../../src/templates/agentops/task-facts.js";
 import type { Candidate, CandidateId } from "../../../src/templates/pricing/model.js";
+import { SIM_DAYS, SIM_RUNS } from "../../../src/templates/pricing/simulate.js";
 import {
   fetchAgentCatalog,
   fetchAgentRun,
@@ -121,7 +123,7 @@ const SCENARIO_PRESETS: readonly ScenarioPreset[] = [
     id: "pdd-evidence-boundary",
     label: "拼多多短袖",
     badge: "链接文案 · 紧周转",
-    text: "分析这个拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。分享文案：纯棉短袖女夏季宽松，券后 ¥39.90，已拼 10 万+，包邮、七天无理由。采购 16 元，包材 1.5 元，快递 6.5 元，目标毛利 25%，可周转资金 300 元。",
+    text: "分析这个拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。分享文案：纯棉短袖女夏季宽松，券后 ¥39.90，已拼 10 万+，包邮、七天无理由。采购 16 元，包材 1.5 元，快递 6.5 元，竞品主流价 39.90 元，目标毛利 25%，可周转资金 300 元。",
   },
   {
     id: "jd-pillow-2loops",
@@ -140,6 +142,24 @@ const SCENARIO_PRESETS: readonly ScenarioPreset[] = [
     label: "加厚收纳箱",
     badge: "薄利 · 测活动保本",
     text: "分析拼多多商品是否值得上架：https://mobile.yangkeduo.com/goods.html?goods_id=412345678901。商品名：加厚收纳箱，售价 ¥38.90。采购价 25 元，包材 2 元，快递 6 元，竞品主流价 38.90 元，日单量 60，目标毛利 5%，推广预算 10 元，可周转资金 5000 元。",
+  },
+  {
+    id: "clarify-missing-cost",
+    label: "便携保温杯",
+    badge: "缺资料 · 会追问",
+    text: "准备上架一款便携保温杯，竞品卖 49 元，日均 30 单，预算 20 元。请做可行性核算。",
+  },
+  {
+    id: "reject-price-inversion",
+    label: "智能手环",
+    badge: "成本倒挂 · 系统驳回",
+    text: "智能手环上架。采购成本 85 元，包材 3 元，快递 7 元。竞品售价 49.9 元，日单量 100，预算 50 元。",
+  },
+  {
+    id: "demand-cap-doubt",
+    label: "复古墨水瓶",
+    badge: "夸大单量 · 标风险",
+    text: "上架高端复古墨水瓶，采购 40 元，运费 8 元，竞品 120 元。声称日单量 2000 单，预算 50 元，周转金 2000 元。",
   },
 ];
 
@@ -913,12 +933,19 @@ export function AgentOpsConsole(): React.JSX.Element {
   }, [run?.task.text]);
   const unit = run?.artifacts.unit ?? activeCandidate?.evaluation.unit ?? null;
   const followUps: readonly FollowUpItem[] = useMemo(() => {
-    if (run === null || run.status === "running" || facts === null || unit === null) return [];
+    if (run === null || run.status === "running" || facts === null) return [];
     const items: FollowUpItem[] = [];
+    const usedDemo = run.artifacts.product !== null && unit !== null;
     for (const question of facts.questions) {
-      if (question.id === "ask-buy") items.push({ id: question.id, kind: "buy", ask: question.ask, demo: money(unit.buyCents) });
-      else if (question.id === "ask-shipping") items.push({ id: question.id, kind: "shipping", ask: question.ask, demo: money(unit.shippingCents) });
-      else if (question.id === "ask-orders") items.push({ id: question.id, kind: "orders", ask: question.ask, demo: String(run.artifacts.product?.marketOrders ?? "默认") + " 单/日" });
+      if (question.id === "ask-buy") {
+        items.push({ id: question.id, kind: "buy", ask: question.ask, ...(usedDemo && unit !== null ? { demo: money(unit.buyCents) } : {}) });
+      } else if (question.id === "ask-shipping") {
+        items.push({ id: question.id, kind: "shipping", ask: question.ask, ...(usedDemo && unit !== null ? { demo: money(unit.shippingCents) } : {}) });
+      } else if (question.id === "ask-orders") {
+        items.push({ id: question.id, kind: "orders", ask: question.ask, ...(usedDemo ? { demo: String(run.artifacts.product?.marketOrders ?? "默认") + " 单/日" } : {}) });
+      } else if (question.id === "ask-competitor") {
+        items.push({ id: question.id, kind: "competitor", ask: question.ask, ...(usedDemo && unit !== null ? { demo: money(run.artifacts.product?.competitorCents ?? 0) } : {}) });
+      }
     }
     return items;
   }, [run, facts, unit]);
@@ -926,15 +953,12 @@ export function AgentOpsConsole(): React.JSX.Element {
   const risk = run?.artifacts.risk ?? null;
   const gateFailRows = risk?.rows.filter((row) => row.status === "fail") ?? [];
   const gateWarnRows = risk?.rows.filter((row) => row.status === "warn") ?? [];
-  const currentStatus: RunStatus | "idle" = busy ? "running" : (run?.status ?? "idle");
+  const view = presentRun(run, busy);
+  const currentStatus = view.dataStatus;
   const statusMeta =
     currentStatus === "idle"
       ? null
-      : (RUN_STATUS_META[currentStatus] ?? {
-          label: currentStatus,
-          tone: "ink" as PillTone,
-          summary: "",
-        });
+      : { label: view.label, tone: view.tone as PillTone, summary: view.summary };
   const llmMeta = llmBadgeMeta(run?.llm ?? null, llm);
 
   return (
@@ -986,6 +1010,13 @@ export function AgentOpsConsole(): React.JSX.Element {
           </button>
         </div>
       </header>
+
+      <p
+        data-testid="simulation-disclaimer"
+        className="rounded-xl border border-paper-300 bg-paper-100/80 px-2.5 py-1.5 text-[11px] leading-snug text-ink-600 sm:px-3.5 sm:py-2 sm:text-[12px]"
+      >
+        【仿真推演】利润和现金流是按 {SIM_DAYS} 天、{SIM_RUNS} 次随机情景汇总的推演，不是确定能赚到的钱，也不能当成真实收入。页面里的示例是用来走流程的构造数据，不是真实商户材料。
+      </p>
 
       {openedFromHistory && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ochre-500/35 bg-ochre-100/70 px-3.5 py-2 text-[12.5px] text-ink-800">
@@ -1225,7 +1256,7 @@ export function AgentOpsConsole(): React.JSX.Element {
           </div>
           <MerchantIntake task={task} busy={busy || decisionBusy} onTaskChange={setTask} onStart={startRun} />
           </details>
-          <p className="text-[11px] text-ink-500">下方也可直接试算；未填经营数据将使用报告内列明的演示假设。</p>
+          <p className="text-[11px] text-ink-500">缺采购价、运费或竞品价时会先追问，不会用演示数字代替核算。</p>
 
           <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-2.5">
             <div className="grid w-full grid-cols-2 gap-1 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:gap-1.5">
@@ -1288,13 +1319,17 @@ export function AgentOpsConsole(): React.JSX.Element {
           <Panel data-testid="three-strategies">
             <PanelHead
               title={
-                run?.status === "completed"
-                  ? `已按「${strategyName(run.artifacts.chosenId)}」拍板`
-                  : run?.status === "rejected"
-                    ? "已驳回"
-                    : run === null
-                      ? "三套策略，由你拍板"
-                      : "三套策略"
+                run !== null && isClarifyRun(run)
+                  ? "待补充资料后再核算"
+                  : run !== null && isSystemReject(run)
+                    ? "系统已驳回上架"
+                    : run?.status === "completed"
+                      ? `已按「${strategyName(run.artifacts.chosenId)}」拍板`
+                      : run?.status === "rejected"
+                        ? "已驳回"
+                        : run === null
+                          ? "三套策略，由你拍板"
+                          : "三套策略"
               }
               desc={
                 <span className="hidden sm:inline">
@@ -1337,20 +1372,28 @@ export function AgentOpsConsole(): React.JSX.Element {
                           ? "请你拍板"
                           : currentStatus === "running"
                             ? "会签进行中"
-                            : run.status === "awaiting-approval"
-                              ? "请你拍板"
-                              : run.status === "completed"
-                                ? "已拍板"
-                                : run.status === "rejected"
-                                  ? "已驳回"
-                                  : "请你拍板"}
+                            : currentStatus === "needs-info"
+                              ? "待补充资料"
+                              : isSystemReject(run)
+                                ? "系统已驳回"
+                                : run.status === "awaiting-approval"
+                                  ? "请你拍板"
+                                  : run.status === "completed"
+                                    ? "已拍板"
+                                    : run.status === "rejected"
+                                      ? "已驳回"
+                                      : "请你拍板"}
                       </span>
                       {run === null ? (
                         <Pill tone="plain">请先运行评审</Pill>
                       ) : currentStatus === "running" ? (
                         <Pill tone="ochre">会签进行中 · 暂不可拍板</Pill>
+                      ) : currentStatus === "needs-info" ? (
+                        <Pill tone="ochre">先补资料再核算</Pill>
                       ) : run.status === "awaiting-approval" ? (
                         <Pill tone="seal">等待掌柜拍板</Pill>
+                      ) : isSystemReject(run) ? (
+                        <Pill tone="seal">系统已驳回方案</Pill>
                       ) : run.status === "completed" ? (
                         <Pill tone="jade">
                           {run.gateDecision === "approve" ? "掌柜已拍板通过" : "演示自动放行已封存"}
@@ -1370,15 +1413,11 @@ export function AgentOpsConsole(): React.JSX.Element {
                       ) : null}
                     </div>
                     <p className={cn("mt-0.5 text-[11.5px] leading-snug text-ink-600 sm:mt-1 sm:text-[12px] sm:leading-relaxed", run?.status === "awaiting-approval" && currentStatus !== "running" && "hidden sm:block")}>
-                      {run === null
-                        ? "评审结束后，在这里选稳价、跟价或冲量，然后通过或驳回。"
-                        : currentStatus === "running"
-                          ? "结果按实际执行进度更新，全部评审完成后解锁拍板。"
-                          : run.status === "awaiting-approval"
-                            ? `现在选的是「${strategyName(activeCandidateId)}」，数字见上方。通过后会按这个方案记下。`
-                            : run.status === "rejected"
-                              ? "这次方案已被驳回，不能再改决定。"
-                              : `已按「${strategyName(run.artifacts.chosenId)}」记下。`}
+                      {run !== null && run.status === "awaiting-approval" && currentStatus !== "running"
+                        ? `现在选的是「${strategyName(activeCandidateId)}」，数字见上方。通过后会按这个方案记下。`
+                        : run !== null && run.status === "completed" && currentStatus === "completed"
+                          ? `已按「${strategyName(run.artifacts.chosenId)}」记下。`
+                          : view.gatePrompt}
                     </p>
                   </div>
 
@@ -1400,11 +1439,15 @@ export function AgentOpsConsole(): React.JSX.Element {
                           ? "暂不可拍板（待评审完成）"
                           : run === null
                             ? "暂不可拍板（未开始）"
-                            : run.status === "completed"
-                              ? "已拍板封存"
-                              : run.status === "rejected"
-                                ? "已驳回封存"
-                                : (
+                            : currentStatus === "needs-info"
+                              ? "待补充资料"
+                              : isSystemReject(run)
+                                ? "系统已驳回"
+                                : run.status === "completed"
+                                  ? "已拍板封存"
+                                  : run.status === "rejected"
+                                    ? "已驳回封存"
+                                    : (
                                 <>
                                   拍板通过
                                   {activeCandidate ? <span className="hidden sm:inline">（{activeCandidate.label}）</span> : null}
@@ -1427,6 +1470,16 @@ export function AgentOpsConsole(): React.JSX.Element {
                     </ActionButton>
                   </div>
                 </div>
+
+                {run !== null && run.status === "rejected" && view.rejectHeadline !== null ? (
+                  <div
+                    data-testid="reject-reason"
+                    className="rounded-xl border border-seal-500/40 bg-seal-100/50 px-3 py-2 text-[12px] leading-relaxed text-seal-600 sm:px-3.5 sm:py-2.5 sm:text-[12.5px]"
+                  >
+                    <div className="font-semibold">{view.rejectHeadline}</div>
+                    {view.rejectBody === null ? null : <p className="mt-0.5">{view.rejectBody}</p>}
+                  </div>
+                ) : null}
 
                 {[...gateFailRows, ...gateWarnRows].length === 0 ? null : <ul data-testid="decision-priorities" className="space-y-1 border-l-2 border-seal-500 pl-2 text-[11px] leading-snug text-ink-700">{[...gateFailRows, ...gateWarnRows].slice(0, 3).map((row, index) => <li key={row.id} className={index === 0 ? undefined : "hidden sm:list-item"}><span className="font-semibold text-seal-600">{row.title}</span>：{row.detail.slice(0, 42)}{row.detail.length > 42 ? "…" : ""}</li>)}</ul>}
                 {gateFailRows.length > 0 || gateWarnRows.length > 0 ? (
@@ -1547,7 +1600,9 @@ export function AgentOpsConsole(): React.JSX.Element {
                 })()
               ) : (
                 <div className="rounded-xl border border-dashed border-paper-300 bg-paper-100/40 px-4 py-6 text-center text-[13px] text-ink-500 sm:py-8">
-                  点上面「开始上架评审」后，这里会给出稳价、跟价、冲量三套方案。
+                  {run !== null && isClarifyRun(run)
+                    ? "关键经营数据还没齐，补上后再给出稳价、跟价、冲量三套方案。"
+                    : "点上面「开始上架评审」后，这里会给出稳价、跟价、冲量三套方案。"}
                 </div>
               )}
 
@@ -1615,8 +1670,8 @@ export function AgentOpsConsole(): React.JSX.Element {
 
                       {run.status === "rejected" ? (
                         <div className="rounded-xl border border-seal-500/40 bg-seal-100/50 p-3.5 text-[12.5px] leading-relaxed text-seal-600">
-                          <div className="font-semibold">掌柜已驳回</div>
-                          <p className="mt-1">这件不上架，也不会生成通过报告。</p>
+                          <div className="font-semibold">{view.rejectHeadline ?? "掌柜已驳回"}</div>
+                          <p className="mt-1">{view.rejectBody ?? "这件不上架，也不会生成通过报告。"}</p>
                         </div>
                       ) : currentStatus === "running" ? (
                         <p className="text-[12.5px] leading-relaxed text-ink-500">
@@ -1637,14 +1692,15 @@ export function AgentOpsConsole(): React.JSX.Element {
                       )}
                     </div>
 
-                    {!busy && (run.status === "completed" || run.status === "rejected") ? (
+                    {!busy && !isClarifyRun(run) && (run.status === "completed" || run.status === "rejected") ? (
                       <SealStamp
                         hash={run.fingerprint}
                         at={run.createdAt}
                         label={
-                          run.status === "rejected"
+                          view.sealLabel ??
+                          (run.status === "rejected"
                             ? "掌柜已驳回 · 已封存"
-                            : `掌柜已拍板 · ${strategyName(run.artifacts.chosenId)}`
+                            : `掌柜已拍板 · ${strategyName(run.artifacts.chosenId)}`)
                         }
                       />
                     ) : null}

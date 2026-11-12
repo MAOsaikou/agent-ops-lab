@@ -686,3 +686,23 @@ test("原定价接口仍能算出三套方案并导出 CSV", async ({ request })
   expect(csv.status()).toBe(200);
   expect(await csv.text()).toContain("方案,售价(元)");
 });
+
+
+test("缺资料示例先追问，成本倒挂由系统驳回而不是当成掌柜拍板", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("scenario-5").click();
+  await page.getByTestId("run-button").click();
+  await expect(page.getByTestId("status")).toHaveAttribute("data-status", "needs-info", { timeout: 30_000 });
+  await expect(page.getByTestId("followup-questions")).toBeVisible();
+  await expect(page.getByTestId("followup-questions")).toContainText("先补齐再核算");
+  await expect(page.getByText("未提供，演示值")).toHaveCount(0);
+
+  await page.getByTestId("scenario-6").click();
+  await page.getByTestId("run-button").click();
+  await expect(page.getByTestId("status")).toHaveAttribute("data-status", "rejected", { timeout: 30_000 });
+  const rejectReason = page.getByTestId("reject-reason");
+  await expect(rejectReason).toBeVisible();
+  await expect(rejectReason).toContainText("系统已驳回上架方案");
+  await expect(rejectReason).toContainText("按竞品价核算无法保本");
+  await expect(page.getByText("掌柜已驳回")).toHaveCount(0);
+});

@@ -77,19 +77,20 @@ test.describe("Phase 2: 无链接填单与诚实追问", () => {
     await expect(page.getByTestId("answer-input-ask-shipping")).toHaveCount(0);
   });
 
-  test("缺失采购价时生成诚实追问与演示值标注，在线补充后重新评审不再追问", async ({ page }) => {
+  test("缺失采购价时先追问、不用演示值核算，在线补充后重新评审不再追问", async ({ page }) => {
     await page.goto("/");
     // 填入缺失采购价的描述
     await page
       .getByTestId("task-box")
       .fill("评估护颈枕价格与现金流。京东价 ¥89，快递 7 元，日单量 50，目标毛利 30%。");
     await page.getByTestId("run-button").click();
-    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "needs-info");
 
-    // 直接试算也必须在首屏拍板区附近诚实标出「未提供，演示值」，无需展开审计折叠项
+    // 缺采购价时先追问，不拿演示值算出一套可拍板方案；补充框在首屏，无需展开审计折叠项
     await expect(page.getByTestId("review-audit")).not.toHaveAttribute("open", "");
-    await expect(page.getByText("未提供，演示值")).toBeVisible();
+    await expect(page.getByText("未提供，演示值")).toHaveCount(0);
     await expect(page.getByTestId("followup-questions")).toBeVisible();
+    await expect(page.getByTestId("followup-questions")).toContainText("先补齐再核算");
 
     // Section 一显示 ask-buy 追问输入框
     const buyInput = page.getByTestId("answer-input-ask-buy");
@@ -128,7 +129,7 @@ test("手机上直接试算缺采购价：补充框首屏可见、能直接填�
     .getByTestId("task-box")
     .fill("评估护颈枕价格与现金流。京东价 ¥89，快递 7 元，日单量 50，目标毛利 30%。");
   await page.getByTestId("run-button").click();
-  await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval");
+  await expect(page.getByTestId("status")).toHaveAttribute("data-status", "needs-info");
   const input = page.getByTestId("answer-input-ask-buy");
   await expect(input).toBeInViewport();
   await expect(page.getByTestId("review-audit")).not.toHaveAttribute("open", "");

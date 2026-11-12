@@ -14,6 +14,15 @@ import { simulate } from "../pricing/simulate.js";
 import { AGENTS, AGENTS_V1, COLLAB_WORKFLOW, DEFAULT_WORKFLOW, resolveAgent } from "./catalog.js";
 import { adjudicateCollaboration, analyzeCollaborationRole, respondToObjections } from "./collaboration.js";
 import { parseTaskFacts } from "./task-facts.js";
+import {
+  demandDoubtRiskRow,
+  demandExceedsCash,
+  evidenceRiskRows,
+  isUnprofitableAtMarket,
+  marketRejectRiskRows,
+  mergeRiskRows,
+  missingEvidence,
+} from "./review-policy.js";
 import type { LiveLlm } from "./llm.js";
 import { copyPrompt, validateCopy } from "./llm.js";
 import type {
@@ -205,7 +214,7 @@ function verify(
   return item;
 }
 
-function executeResearch(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
+function executeResearch(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, strictEvidence = false): void {
   const agent = dispatch(state, events, "research", "intake", "识别商品链接与证据", iteration, emit);
   state.facts = analyzeProductInput({ text: state.taskText });
   runTool(events, "research", "product.parse", agent, `${String(state.facts.links.length)} 条链接，${String(state.facts.fields.length)} 个候选字段，保留字段证据与待确认问题`, emit);
@@ -250,6 +259,43 @@ function executeResearch(state: InternalState, events: RunEvent[], iteration: nu
       questions: [...state.facts.questions, ...extraQuestions],
     };
   }
+  if (strictEvidence) {
+    const gap = missingEvidence(given);
+    if (gap !== null) {
+      state.product = null;
+      state.chosenId = null;
+      state.risk = { level: "fail", rows: evidenceRiskRows(gap) };
+      if (
+        state.facts !== null &&
+        gap.fields.includes("competitor") &&
+        !state.facts.questions.some((question) => question.id === "ask-competitor")
+      ) {
+        state.facts = {
+          ...state.facts,
+          questions: [
+            ...state.facts.questions,
+            {
+              id: "ask-competitor",
+              ask: "同类商品通常卖多少元？",
+              why: "缺少竞品价，无法判断跟价是否保本，先追问再核算。",
+              options: [],
+            },
+          ],
+        };
+      }
+      addEvent(
+        events,
+        "node.output",
+        "需要掌柜补充关键经营数据",
+        "缺少采购价、快递费或竞品价，先追问再核算，不以演示数字给出上架建议",
+        "research",
+        agent,
+        emit,
+      );
+      return;
+    }
+  }
+
   const product: ProductInput = normalizeInput({
     ...base,
     buyCents: given.buyCents ?? base.buyCents,
@@ -261,6 +307,8 @@ function executeResearch(state: InternalState, events: RunEvent[], iteration: nu
     marketOrders: given.marketOrders ?? base.marketOrders,
     targetMargin: given.targetMargin ?? base.targetMargin,
     promoDiscount: given.promoDiscount ?? base.promoDiscount,
+    returnRate: given.returnRate ?? base.returnRate,
+    returnSalvage: given.returnSalvage ?? base.returnSalvage,
   });
   state.product = product;
   state.targetMargin = product.targetMargin;
@@ -722,6 +770,7 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
 export type WorkflowRunOptions = {
   readonly collaboration?: boolean | undefined;
   readonly modelReview?: boolean | undefined;
+  readonly strictEvidence?: boolean | undefined;
 };
 
 export async function runAgentWorkflow(
@@ -766,7 +815,11 @@ export async function runAgentWorkflow(
     emit,
   );
 
-  executeResearch(state, events, 1, emit);
+  const strictEvidence = options?.strictEvidence === true;
+  executeResearch(state, events, 1, emit, strictEvidence);
+  if (strictEvidence && state.product === null) {
+    return finalize(input, state, events, "completed", state.llm, iteration, workflow, agents);
+  }
   executeAccount(state, events, 1, emit);
   executeMarket(state, events, 1, emit);
   if (enableCollaboration) {
@@ -835,6 +888,30 @@ export async function runAgentWorkflow(
       };
       // A changed model preference receives a fresh independent numerical check.
       if (previous !== decision.recommendedId) executeRisk(state, events, iteration, emit);
+    }
+  }
+
+  if (strictEvidence && state.product !== null) {
+    const facts = parseTaskFacts(state.taskText);
+    const extra = [
+      ...(demandExceedsCash(facts) ? [demandDoubtRiskRow()] : []),
+      ...(isUnprofitableAtMarket(state.product) ? marketRejectRiskRows() : []),
+    ];
+    if (extra.length > 0) {
+      state.risk = mergeRiskRows(state.risk?.rows ?? [], extra);
+    }
+    if (isUnprofitableAtMarket(state.product)) {
+      state.gateDecision = "reject";
+      addEvent(
+        events,
+        "gate.decided",
+        "系统驳回上架方案",
+        "按竞品价核算无法保本且毛利为负；autoApprove 接受系统判定，而不是一律通过",
+        "approval",
+        "owner",
+        emit,
+      );
+      return finalize(input, state, events, "rejected", state.llm, iteration, workflow, agents);
     }
   }
 

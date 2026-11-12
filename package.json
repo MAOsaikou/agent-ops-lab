@@ -15,7 +15,7 @@
     "dev:web": "pnpm --dir web dev",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "sim": "tsx scripts/sim.ts",
-    "exp": "tsx scripts/not-implemented.ts exp",
+    "exp": "tsx scripts/exp.ts",
     "replay": "tsx scripts/replay.ts"
   },
   "dependencies": {

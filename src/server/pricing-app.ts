@@ -16,6 +16,8 @@ import { analyzeProductInput } from "../templates/intake/agent.js";
 import { prepareIntake } from "../templates/agentops/preflight.js";
 import { AGENTS, DEFAULT_WORKFLOW, TOOL_CATALOG, WORKFLOW_TEMPLATES } from "../templates/agentops/catalog.js";
 import { DecisionConflictError, isSameDecision, resumeAgentWorkflow, runAgentWorkflow } from "../templates/agentops/runner.js";
+import { BENCHMARK_CASES } from "../templates/agentops/eval/dataset.js";
+import { ALL_TOPOLOGIES, runEvaluationSuite, topologyConfig } from "../templates/agentops/eval/harness.js";
 import type { AgentRun, RunEvent } from "../templates/agentops/types.js";
 import { memoryAgentRunStore, type AgentRunStore } from "./agent-runs.js";
 import { openLlmSettingsStore, type LlmSettingsStore } from "./llm-settings.js";
@@ -66,6 +68,11 @@ const runRequestSchema = z.strictObject({
 const decisionSchema = z.strictObject({
   action: z.enum(["approve", "reject"]),
   candidateId: z.enum(CANDIDATE_IDS).optional(),
+});
+
+const evalRequestSchema = z.strictObject({
+  topologies: z.array(z.enum(ALL_TOPOLOGIES)).min(1).max(ALL_TOPOLOGIES.length).optional(),
+  limit: z.int().min(1).max(12).optional(),
 });
 
 function formatAgentOpsEvent(event: RunEvent): string {
@@ -188,7 +195,7 @@ export function createPricingApp(options: PricingAppOptions): Hono {
                 controller.enqueue(encoder.encode(formatAgentOpsSnapshot(snapshot)));
               }
             },
-            { collaboration: input.collaboration },
+            { collaboration: input.collaboration, strictEvidence: true },
           );
           agentRuns.save(run);
           controller.enqueue(encoder.encode(formatAgentOpsDone(run)));
@@ -239,6 +246,7 @@ export function createPricingApp(options: PricingAppOptions): Hono {
     try {
       const run = await runAgentWorkflow(input, llmSettings.resolve(), undefined, {
         collaboration: parsed.data.collaboration,
+        strictEvidence: true,
       });
       agentRuns.save(run);
       return c.json(run, 201);
@@ -315,6 +323,29 @@ export function createPricingApp(options: PricingAppOptions): Hono {
   app.get("/api/agentops/runs/:id/events", (c) => {
     const run = agentRuns.load(c.req.param("id"));
     return run === undefined ? c.json({ code: "run-not-found" }, 404) : c.json({ events: run.events, fingerprint: run.fingerprint });
+  });
+
+
+  app.post("/api/agentops/eval", async (c) => {
+    const body: unknown = await c.req.json().catch(() => ({}));
+    const parsed = evalRequestSchema.safeParse(body ?? {});
+    if (!parsed.success) return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
+    const topologies = parsed.data.topologies ?? ["rule"];
+    const cases = parsed.data.limit === undefined ? BENCHMARK_CASES : BENCHMARK_CASES.slice(0, parsed.data.limit);
+    const needsLive = topologies.some((topology) => topologyConfig(topology).useLive);
+    try {
+      const result = await runEvaluationSuite({
+        topologies,
+        cases,
+        live: needsLive ? llmSettings.resolve() : null,
+      });
+      return c.json(result);
+    } catch (error) {
+      return c.json(
+        { code: "eval-failed", detail: error instanceof Error ? error.message : "Evaluation failed" },
+        422,
+      );
+    }
   });
 
   app.get("/api/plans", (c) => c.json({ plans: options.store.list() }));

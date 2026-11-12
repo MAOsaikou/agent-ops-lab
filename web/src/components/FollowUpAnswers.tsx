@@ -5,13 +5,13 @@ export type FollowUpItem = {
   readonly id: string;
   readonly kind: AnswerKind;
   readonly ask: string;
-  /** Human-readable stand-in value actually used in the numbers (never an invented real figure). */
-  readonly demo: string;
+  /** Present only when a labelled demo number was actually used in the shown totals. */
+  readonly demo?: string;
 };
 
 /**
- * First-screen follow-up: the merchant skipped a required fact, so the numbers above use a labelled
- * demo value. The answer box lives here (not inside the audit fold) so it can be answered in place.
+ * First-screen follow-up: the merchant still owes a required fact. When no demo value was used,
+ * the prompt asks them to fill it in before any pricing advice is given.
  */
 export function FollowUpAnswers({ items, values, disabled, onChange, onSubmit }: {
   readonly items: readonly FollowUpItem[];
@@ -21,15 +21,16 @@ export function FollowUpAnswers({ items, values, disabled, onChange, onSubmit }:
   readonly onSubmit: (item: FollowUpItem) => void;
 }): React.JSX.Element | null {
   if (items.length === 0) return null;
+  const honest = items.every((item) => item.demo === undefined);
   return (
     <section data-testid="followup-questions" aria-label="待补充资料" className="rounded-xl border border-ochre-500/30 bg-ochre-100/50 px-2.5 py-2">
-      <div className="text-[11.5px] font-semibold text-ochre-500">还差 {String(items.length)} 项资料，上面的数字暂按演示值试算</div>
+      <div className="text-[11.5px] font-semibold text-ochre-500">{honest ? `还差 ${String(items.length)} 项资料，先补齐再核算，不用演示数字试算` : `还差 ${String(items.length)} 项资料，上面的数字暂按演示值试算`}</div>
       <ul className="mt-1.5 space-y-1.5">
         {items.map((item) => (
           <li key={item.id} className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 flex-1 text-[11.5px] leading-snug text-ink-800">
               <span className="font-medium">{item.ask}</span>{" "}
-              <Pill tone="ochre">未提供，演示值 {item.demo}</Pill>
+              {item.demo !== undefined ? <Pill tone="ochre">未提供，演示值 {item.demo}</Pill> : null}
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <input
