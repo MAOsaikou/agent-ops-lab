@@ -204,6 +204,11 @@ describe("Task 4: Substantive Reasoning & Whitelisted Tool Calling Closed Loop",
     const kbVolume = resultVolume.toolCalls?.find((t) => t.tool === "knowledge.search");
     expect(kbProfit).toBeUndefined();
     expect(kbVolume).toBeDefined();
+    expect(kbVolume?.ok).toBe(true);
+    const kbParams = kbVolume?.params as { query?: string; platform?: string };
+    expect(typeof kbParams.query).toBe("string");
+    expect(kbParams.query!.trim().length).toBeGreaterThan(0);
+    expect(kbParams.platform).toBe(baseProduct.platform);
 
     // 5. Chair tool calls: Chair questioning targets different roles/candidates
     const chairCallsProfit = resultProfit.toolCalls?.filter((t) => t.callerRole === "chair");

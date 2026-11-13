@@ -308,6 +308,13 @@ function schedulerOf(value: unknown, fallback: { loads: Record<string, number>; 
   };
 }
 
+function tokenUsageOf(value: unknown): { promptTokens: number; completionTokens: number } | undefined {
+  if (!isRec(value)) return undefined;
+  const promptTokens = num(value.promptTokens, 0);
+  const completionTokens = num(value.completionTokens, 0);
+  return { promptTokens, completionTokens };
+}
+
 export function parseStoredRun(raw: unknown): StoredRunResult {
   if (!isRec(raw)) return { ok: false, reason: "卷宗内容不是一个对象" };
   if (typeof raw.id !== "string" || raw.id.length === 0) return { ok: false, reason: "卷宗缺少编号" };
@@ -333,6 +340,7 @@ export function parseStoredRun(raw: unknown): StoredRunResult {
     ? (raw.workflow as unknown as AgentRun["workflow"])
     : { id: "legacy", title: "旧版评审流程", intent: "", nodes: [] };
 
+  const tokenUsage = tokenUsageOf(raw.tokenUsage);
   const run: AgentRun = {
     id: raw.id,
     createdAt: str(raw.createdAt),
@@ -355,6 +363,7 @@ export function parseStoredRun(raw: unknown): StoredRunResult {
     loads,
     calls,
     scheduler: schedulerOf(raw.scheduler, { loads, calls, failures }, raw),
+    ...(tokenUsage === undefined ? {} : { tokenUsage }),
   };
   return { ok: true, run };
 }

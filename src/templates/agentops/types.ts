@@ -258,6 +258,11 @@ export type LlmInfo = {
   readonly note: string;
 };
 
+export type RunTokenUsage = {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+};
+
 export type AgentRun = {
   readonly id: string;
   readonly createdAt: string;
@@ -282,6 +287,8 @@ export type AgentRun = {
   readonly loads: Readonly<Record<string, number>>;
   readonly calls: Readonly<Record<string, number>>;
   readonly scheduler: SchedulerState;
+  /** Prompt/completion tokens from runner-owned live calls (e.g. copy). Not sealed in the fingerprint. */
+  readonly tokenUsage?: RunTokenUsage | undefined;
 };
 
 export type RunEventListener = (event: RunEvent, snapshot: AgentRun) => void;
@@ -329,4 +336,5 @@ export type InternalState = {
   readonly runs: Record<string, number>;
   readonly dispatches: Dispatch[];
   gateNeeded: boolean;
+  tokenUsage: { promptTokens: number; completionTokens: number };
 };

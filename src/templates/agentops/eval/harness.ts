@@ -23,18 +23,20 @@ export type TopologyConfig = {
   readonly collaboration: boolean;
   readonly modelReview: boolean;
   readonly useLive: boolean;
+  readonly singleAgent: boolean;
+  readonly economicLoop: boolean;
 };
 
 export function topologyConfig(topology: TopologyName): TopologyConfig {
   switch (topology) {
     case "rule":
-      return { collaboration: false, modelReview: false, useLive: false };
+      return { collaboration: false, modelReview: false, useLive: false, singleAgent: false, economicLoop: true };
     case "single-agent":
-      return { collaboration: false, modelReview: false, useLive: true };
+      return { collaboration: false, modelReview: false, useLive: true, singleAgent: true, economicLoop: true };
     case "collab-no-review":
-      return { collaboration: true, modelReview: false, useLive: true };
+      return { collaboration: true, modelReview: false, useLive: true, singleAgent: false, economicLoop: false };
     case "collab-with-review":
-      return { collaboration: true, modelReview: true, useLive: true };
+      return { collaboration: true, modelReview: true, useLive: true, singleAgent: false, economicLoop: true };
   }
 }
 
@@ -68,6 +70,8 @@ export type CaseObservation = {
   readonly outcome: "approve" | "reject" | "clarify";
   readonly detectedRiskIds: readonly string[];
   readonly claimTexts: readonly string[];
+  readonly chosenId: string | null;
+  readonly clarifiedFields: readonly string[];
 };
 
 export type CaseScore = {
@@ -107,6 +111,18 @@ export function scoreCase(expectations: CaseExpectations, observed: CaseObservat
     }
   }
 
+  if (expectations.targetCandidateId !== undefined) {
+    if (observed.chosenId !== expectations.targetCandidateId) {
+      unmatched.push(`推荐候选为 ${observed.chosenId ?? "无"}，预期 ${expectations.targetCandidateId}`);
+    }
+  }
+
+  for (const field of expectations.mustClarifyFields ?? []) {
+    if (!observed.clarifiedFields.includes(field)) {
+      unmatched.push(`未追问必补字段: ${field}`);
+    }
+  }
+
   return {
     pass: unmatched.length === 0,
     unmatched,
@@ -132,6 +148,21 @@ function extractOutcome(run: AgentRun): CaseDetail["outcome"] {
   return "approve";
 }
 
+const CLARIFY_FIELD_BY_QUESTION_ID: Readonly<Record<string, string>> = {
+  "ask-buy": "buy",
+  "ask-shipping": "shipping",
+  "ask-competitor": "competitor",
+};
+
+function clarifiedFieldsFrom(run: AgentRun): readonly string[] {
+  const fields = new Set<string>();
+  for (const question of run.scheduler.facts?.questions ?? []) {
+    const field = CLARIFY_FIELD_BY_QUESTION_ID[question.id];
+    if (field !== undefined) fields.add(field);
+  }
+  return [...fields];
+}
+
 function observeRun(run: AgentRun): CaseObservation {
   const copy = run.artifacts.copy;
   return {
@@ -143,15 +174,17 @@ function observeRun(run: AgentRun): CaseObservation {
       ...run.artifacts.report,
       ...run.artifacts.assumptions,
     ],
+    chosenId: run.artifacts.chosenId,
+    clarifiedFields: clarifiedFieldsFrom(run),
   };
 }
 
-function countToolCalls(run: AgentRun): number {
+export function countToolCalls(run: AgentRun): number {
   const eventCalls = run.events.filter((event) => event.type === "tool.called").length;
-  if (eventCalls > 0) {
-    return eventCalls;
-  }
-  return Object.values(run.calls).reduce((sum, value) => sum + value, 0);
+  const deliberationCalls = run.artifacts.deliberation?.toolCalls?.length ?? 0;
+  // Event log covers the product runner; deliberation tools are stored on the artifact and
+  // are not also emitted as tool.called. Do not fall back to run.calls (those are agent dispatches).
+  return eventCalls + deliberationCalls;
 }
 
 function hasModelReview(run: AgentRun): boolean {
@@ -170,10 +203,10 @@ type Measurement = {
   readonly score: CaseScore;
 };
 
-function sumRunUsage(run: AgentRun): { promptTokens: number; completionTokens: number } {
+export function sumRunUsage(run: AgentRun): { promptTokens: number; completionTokens: number } {
   const nodes = run.artifacts.deliberation?.nodes ?? [];
-  let promptTokens = 0;
-  let completionTokens = 0;
+  let promptTokens = Math.max(0, run.tokenUsage?.promptTokens ?? 0);
+  let completionTokens = Math.max(0, run.tokenUsage?.completionTokens ?? 0);
   for (const node of nodes) {
     const usage = (node as { usage?: { promptTokens?: number; completionTokens?: number } }).usage;
     if (usage === undefined) continue;
@@ -231,7 +264,13 @@ export async function runEvaluationSuite(options: EvalOptions): Promise<EvalSuit
         },
         live,
         undefined,
-        { collaboration: config.collaboration, modelReview: config.modelReview, strictEvidence: true },
+        {
+          collaboration: config.collaboration,
+          modelReview: config.modelReview,
+          strictEvidence: true,
+          singleAgent: config.singleAgent,
+          economicLoop: config.economicLoop,
+        },
       );
       const elapsedMs = Date.now() - started;
 

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { Page, Route } from "@playwright/test";
 
-export const API_ORIGIN = "http://127.0.0.1:47321";
+export const API_ORIGIN = process.env["E2E_API_ORIGIN"] ?? "http://127.0.0.1:47321";
 
 export type FixtureName =
   | "pillow-awaiting-2loops"
@@ -72,8 +72,13 @@ export async function mockHistory(
   items: readonly { readonly summary: Record<string, unknown>; readonly serve: Served }[],
 ): Promise<void> {
   const byId = new Map(items.map((item) => [String(item.summary.id), item.serve]));
+  const historyPath = /^\/api\/agentops\/runs(\/[A-Za-z0-9_-]+)?$/;
   await page.route(
-    (url) => url.origin === API_ORIGIN && /^\/api\/agentops\/runs(\/[A-Za-z0-9_-]+)?$/.test(url.pathname),
+    (url) => {
+      if (!historyPath.test(url.pathname)) return false;
+      // Official e2e talks to 47321; a same-origin /api frontend (or an isolated port) must also be mocked.
+      return url.origin === API_ORIGIN || (url.hostname === "127.0.0.1" && url.pathname.startsWith("/api/"));
+    },
     async (route: Route) => {
       const request = route.request();
       if (request.method() !== "GET") {

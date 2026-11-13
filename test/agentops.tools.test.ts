@@ -117,6 +117,17 @@ describe("Task 2: Whitelisted Read-Only Tool Contracts & Dispatcher", () => {
     expect(checkIds).toContain("cashflow");
   });
 
+  test("knowledge.search rejects a call that omits the required query", async () => {
+    const toolResult = await dispatchToolCall({
+      tool: "knowledge.search",
+      params: { platform: "taobao" },
+      callerRole: "growth-operator",
+      runId: "test-run-6-missing-query",
+    });
+    expect(toolResult.ok).toBe(false);
+    expect(toolResult.error ?? "").toMatch(/query/i);
+  });
+
   test("knowledge.search searches platform fee and rules information", async () => {
     const toolResult = await dispatchToolCall<readonly { id: string; title: string; detail: string }[]>({
       tool: "knowledge.search",

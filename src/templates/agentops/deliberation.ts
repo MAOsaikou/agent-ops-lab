@@ -330,7 +330,10 @@ export async function runDeliberation(input: DeliberationInput): Promise<Deliber
         if (candidate.id === "match") {
           await callTool(
             "knowledge.search",
-            { platform: input.product.platform },
+            {
+              query: "平台费率、结算周期与标题规则，核对匹配竞品价的可行性",
+              platform: input.product.platform,
+            },
             role,
             "检索平台费率与规则，核对匹配竞品价的可行性",
           );

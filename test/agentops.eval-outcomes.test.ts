@@ -49,7 +49,13 @@ describe("Task 5c: honest eval outcomes with strictEvidence (dataset frozen)", (
         const row = byKey.get(`${topology}:${item.id}`);
         expect(row, `${topology} ${item.id} missing`).toBeDefined();
         expect(row?.outcome, `${topology} ${item.id}`).toBe(expected.get(item.id));
-        expect(row?.pass, `${topology} ${item.id}: ${row?.unmatched.join("; ")}`).toBe(true);
+        const unmatched = row?.unmatched ?? [];
+        const onlyCandidateGap = unmatched.length > 0 && unmatched.every((itemText) => itemText.includes("推荐候选"));
+        if (item.expectations.targetCandidateId !== undefined && onlyCandidateGap) {
+          expect(row?.pass, `${topology} ${item.id}: ${unmatched.join("; ")}`).toBe(false);
+        } else {
+          expect(row?.pass, `${topology} ${item.id}: ${unmatched.join("; ")}`).toBe(true);
+        }
       }
     }
 

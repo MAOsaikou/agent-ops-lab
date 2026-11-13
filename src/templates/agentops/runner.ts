@@ -11,7 +11,7 @@ import type { Candidate, CandidateId, ProductInput } from "../pricing/model.js";
 import { normalizeInput, recommendId } from "../pricing/plan.js";
 import { PLATFORM_PRESETS } from "../pricing/platform.js";
 import { simulate } from "../pricing/simulate.js";
-import { AGENTS, AGENTS_V1, COLLAB_WORKFLOW, DEFAULT_WORKFLOW, resolveAgent } from "./catalog.js";
+import { AGENTS, AGENTS_V1, COLLAB_WORKFLOW, DEFAULT_WORKFLOW, GENERALIST_AGENT, resolveAgent } from "./catalog.js";
 import { adjudicateCollaboration, analyzeCollaborationRole, respondToObjections } from "./collaboration.js";
 import { parseTaskFacts } from "./task-facts.js";
 import {
@@ -127,6 +127,7 @@ function initialState(
     runs: {},
     dispatches: [],
     gateNeeded: true,
+    tokenUsage: { promptTokens: 0, completionTokens: 0 },
   };
 }
 
@@ -184,6 +185,9 @@ function dispatch(
   }));
   state.calls[chosen.id] = (state.calls[chosen.id] ?? 0) + 1;
   state.runs[chosen.id] = (state.runs[chosen.id] ?? 0) + 1;
+  // Cumulative assignments in this run, not concurrent in-flight load. Leaving the
+  // value in place after the node finishes keeps later dispatch notes and v1
+  // fingerprints stable, and the score penalty stays "already assigned N times".
   state.loads[chosen.id] = (state.loads[chosen.id] ?? 0) + 1;
   const rationale = `需求=${capability}；从 ${String(candidates.length)} 个候选中按能力、当前负载、历史失败次数选择 ${chosen.name}`;
   state.dispatches.push({ nodeId, need: capability, chosen: chosen.id, rationale, candidates });
@@ -625,6 +629,8 @@ async function executeCopy(
         prompt: prompt + (attempt === 2 ? "\n上次失败原因：" + reason + "。请修正后只返回规定 JSON。" : ""),
         maxTokens: 1200, responseFormat: "json_object", reasoningEffort: "none", timeoutMs: 45_000,
       });
+      state.tokenUsage.promptTokens += Math.max(0, completion.usage.promptTokens);
+      state.tokenUsage.completionTokens += Math.max(0, completion.usage.completionTokens);
       const checked = validateCopy(completion.text, preset.titleMax);
       if (!checked.ok) throw new Error(checked.reason);
       state.copy = { ...state.copy, titles: checked.value.titles.map((text) => ({ label: live.model, text, length: [...text].length })) };
@@ -763,6 +769,10 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
     runs: { ...(sched?.runs ?? {}) },
     dispatches: [...run.dispatches],
     gateNeeded: run.status === "awaiting-approval",
+    tokenUsage: {
+      promptTokens: run.tokenUsage?.promptTokens ?? 0,
+      completionTokens: run.tokenUsage?.completionTokens ?? 0,
+    },
   };
   return { state, iteration };
 }
@@ -771,6 +781,10 @@ export type WorkflowRunOptions = {
   readonly collaboration?: boolean | undefined;
   readonly modelReview?: boolean | undefined;
   readonly strictEvidence?: boolean | undefined;
+  /** When true, dispatch every node to GENERALIST_AGENT. Default false keeps v1 catalogs. */
+  readonly singleAgent?: boolean | undefined;
+  /** When false, skip the economic repair loop. Default true keeps v1 loop behaviour. */
+  readonly economicLoop?: boolean | undefined;
 };
 
 export async function runAgentWorkflow(
@@ -781,6 +795,8 @@ export async function runAgentWorkflow(
 ): Promise<AgentRun> {
   const enableCollaboration = options?.collaboration ?? true;
   const modelReview = enableCollaboration && live !== null && options?.modelReview !== false;
+  const enableEconomicLoop = options?.economicLoop !== false;
+  const singleAgent = options?.singleAgent === true;
   const workflow: WorkflowDocument = modelReview ? {
     ...COLLAB_WORKFLOW, id: "product-launch-review.v3", title: "商品上架评审 · 模型协作会审",
     nodes: COLLAB_WORKFLOW.nodes.flatMap((node) => node.id === "copy" ? [
@@ -788,7 +804,7 @@ export async function runAgentWorkflow(
       { ...node, dependsOn: ["model-review"] },
     ] : [node]),
   } : enableCollaboration ? COLLAB_WORKFLOW : DEFAULT_WORKFLOW;
-  const agents = enableCollaboration ? AGENTS : AGENTS_V1;
+  const agents = singleAgent ? [GENERALIST_AGENT] : enableCollaboration ? AGENTS : AGENTS_V1;
   const state = initialState(input.taskText, input.autoApprove, agents);
   const events: RunEvent[] = [];
   let status: AgentRun["status"] = "running";
@@ -827,7 +843,7 @@ export async function runAgentWorkflow(
   }
   let lastRiskVerdicts = executeRisk(state, events, 1, emit);
 
-  while (state.risk?.level === "fail" && iteration < 3) {
+  while (enableEconomicLoop && state.risk?.level === "fail" && iteration < 3) {
     const nextIteration = iteration + 1;
     const planned = planAdjustment(state, nextIteration);
     if (planned === null) {
@@ -1072,6 +1088,7 @@ function finalize(
     failures,
     loads,
     calls,
+    tokenUsage: { promptTokens: state.tokenUsage.promptTokens, completionTokens: state.tokenUsage.completionTokens },
     scheduler: {
       loads,
       calls,

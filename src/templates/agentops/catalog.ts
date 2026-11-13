@@ -42,6 +42,39 @@ export const AGENTS: readonly AgentSpec[] = [
 
 export const AGENTS_V1: readonly AgentSpec[] = AGENTS.slice(0, 7).map((agent) => agent.id === "risk-auditor" ? { ...agent, maxCallsPerRun: 4 } : agent.id === "market-analyst" ? { ...agent, tools: agent.tools.filter((tool) => tool !== "pricing.verify") } : agent);
 
+/** Opt-in single-agent baseline only. Default and collaboration:false v1 catalogs stay unchanged. */
+export const GENERALIST_AGENT: AgentSpec = {
+  id: "generalist",
+  name: "综合执行 Agent",
+  role: "在单 Agent 对照基线中独立完成研究、核算、报价、风控、文案与报告；不进入默认或 v1 目录。",
+  version: "1.0.0",
+  capabilities: {
+    planning: 1,
+    intake: 1,
+    cost: 1,
+    market: 1,
+    risk: 1,
+    copy: 1,
+    report: 1,
+    procure: 1,
+    price: 1,
+    promote: 1,
+  },
+  tools: [
+    "workflow.plan",
+    "product.parse",
+    "knowledge.search",
+    "pricing.unit-cost",
+    "pricing.break-even",
+    "pricing.candidates",
+    "pricing.simulate",
+    "pricing.verify",
+    "copy.generate",
+    "report.compile",
+  ],
+  maxCallsPerRun: 32,
+};
+
 export const TOOL_CATALOG = [
   { name: "product.parse", title: "商品链接与分享文案解析", kind: "parse" },
   { name: "knowledge.search", title: "行业规则知识库检索", kind: "kb" },
@@ -120,6 +153,12 @@ export const WORKFLOW_TEMPLATES = [
   },
 ] as const;
 
+/**
+ * `loads` is the cumulative number of times the agent has already been dispatched
+ * in the current run, not in-flight concurrency. The product runner increments it
+ * on dispatch and does not decrement after a node finishes, so later scores remain
+ * explainable as "already assigned N times this run".
+ */
 export function resolveAgent(
   need: Capability,
   loads: Readonly<Record<string, number>>,

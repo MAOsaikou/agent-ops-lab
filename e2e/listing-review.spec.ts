@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const API = "http://127.0.0.1:47321";
+const API = process.env["E2E_API_ORIGIN"] ?? "http://127.0.0.1:47321";
 
 const PLAN_INPUT = {
   platform: "pdd",
