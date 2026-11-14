@@ -1,4 +1,10 @@
+import type {
+  DecisionAct,
+  DecisionPack,
+  DecisionSource,
+} from "./decision-act.js";
 import type { DeliberationArtifact } from "./deliberation.js";
+import type { ProtocolError, ProtocolTrace, RetrievalCitation } from "./protocol-retrieval.js";
 import type { Candidate, CandidateId, CheckRow, PlanCopy, ProductInput, UnitCost } from "../pricing/model.js";
 
 export const CAPABILITIES = ["planning", "intake", "cost", "market", "risk", "copy", "report", "procure", "price", "promote"] as const;
@@ -58,6 +64,7 @@ export type EventType =
   | "llm.retrying"
   | "llm.completed"
   | "llm.fallback"
+  | "budget.exceeded"
   | "run.paused"
   | "run.completed";
 
@@ -214,6 +221,12 @@ export type CollabComparison = {
   readonly selected: boolean;
 };
 
+export type ChallengeOutcome =
+  | "skipped-no-tension"
+  | "upheld"
+  | "rebutted"
+  | "rebuttal-ungrounded";
+
 export type Artifacts = {
   readonly product: ProductInput | null;
   readonly unit: UnitCost | null;
@@ -228,9 +241,18 @@ export type Artifacts = {
   readonly assumptions: readonly string[];
   readonly collaboration?: CollaborationArtifact | undefined;
   readonly deliberation?: DeliberationArtifact | undefined;
+  readonly citations?: readonly RetrievalCitation[] | undefined;
+  readonly decisionPack?: DecisionPack | undefined;
+  readonly decisionAct?: DecisionAct | undefined;
+  readonly decisionSource?: DecisionSource | undefined;
+  readonly clarifiedFields?: readonly string[] | undefined;
+  readonly consultedSourceIds?: readonly string[] | undefined;
+  readonly decisionCompletionsUsed?: number | undefined;
+  readonly challengeTriggered?: boolean | undefined;
+  readonly challengeOutcome?: ChallengeOutcome | undefined;
 };
 
-export type RunStatus = "running" | "awaiting-approval" | "completed" | "rejected";
+export type RunStatus = "running" | "awaiting-approval" | "completed" | "rejected" | "stopped";
 
 export type GateAction = "approve" | "reject";
 
@@ -263,6 +285,21 @@ export type RunTokenUsage = {
   readonly completionTokens: number;
 };
 
+export type BudgetCeiling = {
+  readonly maxTokens: number;
+  readonly maxToolCalls: number;
+  readonly timeoutMs: number;
+};
+
+export type BudgetStopReason = "budget.tool_calls" | "budget.tokens" | "budget.timeout" | "budget.completions";
+
+export type UsageAccounting = {
+  readonly source: "actual" | "predicted" | "unknown";
+  readonly actualTokens?: number;
+  readonly predictedTokens?: number;
+  readonly unknown: boolean;
+};
+
 export type AgentRun = {
   readonly id: string;
   readonly createdAt: string;
@@ -276,7 +313,7 @@ export type AgentRun = {
   readonly loops: readonly LoopIteration[];
   readonly artifacts: Artifacts;
   readonly llm: LlmInfo;
-  // When status is "completed" or "rejected", fingerprint seals { workflow, events, artifacts }.
+  // When status is "completed", "rejected", or "stopped", fingerprint seals { workflow, events, artifacts }.
   // When status is "awaiting-approval" or "running", fingerprint reflects the current partial chain.
   readonly fingerprint: string;
   readonly notes: readonly string[];
@@ -289,6 +326,10 @@ export type AgentRun = {
   readonly scheduler: SchedulerState;
   /** Prompt/completion tokens from runner-owned live calls (e.g. copy). Not sealed in the fingerprint. */
   readonly tokenUsage?: RunTokenUsage | undefined;
+  readonly stopReason?: BudgetStopReason | undefined;
+  readonly usageAccounting?: UsageAccounting | undefined;
+  readonly protocolTraces?: readonly ProtocolTrace[] | undefined;
+  readonly protocolErrors?: readonly ProtocolError[] | undefined;
 };
 
 export type RunEventListener = (event: RunEvent, snapshot: AgentRun) => void;
@@ -325,6 +366,14 @@ export type InternalState = {
   report: string[];
   collaboration?: CollaborationArtifact | undefined;
   deliberation?: DeliberationArtifact | undefined;
+  decisionPack?: DecisionPack | undefined;
+  decisionAct?: DecisionAct | undefined;
+  decisionSource?: DecisionSource | undefined;
+  clarifiedFields?: readonly string[] | undefined;
+  consultedSourceIds?: readonly string[] | undefined;
+  decisionCompletionsUsed?: number | undefined;
+  challengeTriggered?: boolean | undefined;
+  challengeOutcome?: ChallengeOutcome | undefined;
   llm: LlmInfo;
   readonly assumptions: string[];
   readonly verifications: Verification[];
@@ -337,4 +386,11 @@ export type InternalState = {
   readonly dispatches: Dispatch[];
   gateNeeded: boolean;
   tokenUsage: { promptTokens: number; completionTokens: number };
+  stopReason?: BudgetStopReason | undefined;
+  usageAccounting?: UsageAccounting | undefined;
+  citations?: readonly RetrievalCitation[] | undefined;
+  readonly protocolTraces: ProtocolTrace[];
+  readonly protocolErrors: ProtocolError[];
+  hasProtocolOptIn: boolean;
+  hasRetrievalOptIn: boolean;
 };

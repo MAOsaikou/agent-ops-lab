@@ -75,4 +75,16 @@ describe("demo presentation for honest clarify and system reject", () => {
     expect(view.dataStatus).toBe("running");
     expect(view.label).toBe("会签进行中");
   });
+
+  test("stopped run is never labelled as running or sealed approval", () => {
+    const view = presentRun(
+      run({ status: "stopped", stopReason: "budget.tokens" }),
+      false,
+    );
+    expect(view.dataStatus).toBe("stopped");
+    expect(view.label).toBe("预算已用尽，已停止");
+    expect(view.label).not.toContain("进行中");
+    expect(view.sealLabel).toBeNull();
+    expect(view.tone).toBe("seal");
+  });
 });

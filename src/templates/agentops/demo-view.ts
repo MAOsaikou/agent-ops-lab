@@ -10,6 +10,7 @@ export type DemoDataStatus = RunStatus | "needs-info" | "idle";
 
 export type RunViewInput = {
   readonly status: RunStatus;
+  readonly stopReason?: string | undefined;
   readonly gateDecision: "approve" | "reject" | null;
   readonly artifacts: {
     readonly product: object | null;
@@ -84,6 +85,25 @@ export function presentRun(run: RunViewInput | null, busy: boolean): DemoView {
       sealLabel: "系统已驳回 · 已封存",
       rejectHeadline: "系统已驳回上架方案",
       rejectBody: "按竞品价核算无法保本且毛利为负，这件不能上架。",
+    };
+  }
+  if (run.status === "stopped") {
+    return {
+      dataStatus: "stopped",
+      label: "预算已用尽，已停止",
+      summary:
+        run.stopReason === "budget.timeout"
+          ? "触发运行耗时上限，已安全停止并保留已产生的事件链"
+          : run.stopReason === "budget.tool_calls"
+            ? "触发工具调用次数上限，已安全停止并保留已产生的事件链"
+            : run.stopReason === "budget.completions"
+              ? "触发决策模型调用次数上限，已安全停止并保留已产生的事件链"
+              : "触发预算上限，已安全停止并保留已产生的事件链",
+      tone: "seal",
+      gatePrompt: "本次运行因预算或超时上限停止，不可再拍板。",
+      sealLabel: null,
+      rejectHeadline: null,
+      rejectBody: null,
     };
   }
   if (run.status === "awaiting-approval") {

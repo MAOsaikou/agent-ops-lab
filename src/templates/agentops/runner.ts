@@ -1,4 +1,12 @@
-import { runDeliberation } from "./deliberation.js";
+import {
+  applyDecisionAct,
+  buildDecisionPack,
+  runMultiConsensus,
+  runSingleSelfReview,
+  type DecisionReviewMode,
+  type EvidenceSource,
+} from "./decision-act.js";
+import { estimatePromptTokens, runDeliberation } from "./deliberation.js";
 import { sha256Hex } from "../../engine/hash.js";
 import { parseRunId } from "../../engine/ids.js";
 import { canonicalJson } from "../../engine/json.js";
@@ -25,10 +33,18 @@ import {
 } from "./review-policy.js";
 import type { LiveLlm } from "./llm.js";
 import { copyPrompt, validateCopy } from "./llm.js";
+import {
+  runMcpProtocolHook,
+  runRetrievalHook,
+  type ProtocolsConfig,
+  type RetrievalOptions,
+} from "./protocol-retrieval.js";
 import type {
   AgentRun,
   AgentSpec,
   Artifacts,
+  BudgetCeiling,
+  BudgetStopReason,
   GateDecisionInput,
   InternalState,
   LoopAction,
@@ -36,6 +52,7 @@ import type {
   RiskRow,
   RunEvent,
   RunEventListener,
+  UsageAccounting,
   Verification,
   VerificationStatus,
   WorkflowDocument,
@@ -128,6 +145,10 @@ function initialState(
     dispatches: [],
     gateNeeded: true,
     tokenUsage: { promptTokens: 0, completionTokens: 0 },
+    protocolTraces: [],
+    protocolErrors: [],
+    hasProtocolOptIn: false,
+    hasRetrievalOptIn: false,
   };
 }
 
@@ -196,7 +217,184 @@ function dispatch(
   return chosen.id;
 }
 
-function runTool(events: RunEvent[], nodeId: string, tool: string, agentId: string, detail: string, emit?: EmitEvent): void {
+type BudgetTracker = {
+  readonly ceiling: BudgetCeiling;
+  readonly startedAt: number;
+  toolCalls: number;
+  actualTokens: number;
+  predictedTokens: number;
+  hasActualUsage: boolean;
+  missingUsage: boolean;
+  stoppedReason: BudgetStopReason | null;
+};
+
+class BudgetExceededError extends Error {
+  readonly reason: BudgetStopReason;
+  readonly detail: string;
+  readonly nodeId: string | null;
+  readonly agentId: string | null;
+
+  constructor(reason: BudgetStopReason, detail: string, nodeId: string | null = null, agentId: string | null = null) {
+    super(detail);
+    this.name = "BudgetExceededError";
+    this.reason = reason;
+    this.detail = detail;
+    this.nodeId = nodeId;
+    this.agentId = agentId;
+  }
+}
+
+function validateBudgetCeiling(ceiling: BudgetCeiling): void {
+  const fields: ReadonlyArray<[string, number]> = [
+    ["maxTokens", ceiling.maxTokens],
+    ["maxToolCalls", ceiling.maxToolCalls],
+    ["timeoutMs", ceiling.timeoutMs],
+  ];
+  for (const [name, value] of fields) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      throw new Error(`Invalid budgetCeiling.${name}: must be a finite non-negative number`);
+    }
+  }
+}
+
+function checkTimeout(budget: BudgetTracker | undefined, nodeId: string | null, agentId: string | null): void {
+  if (!budget) return;
+  const elapsed = Date.now() - budget.startedAt;
+  if (elapsed >= budget.ceiling.timeoutMs) {
+    throw new BudgetExceededError(
+      "budget.timeout",
+      `运行耗时 ${String(elapsed)}ms 已达 timeoutMs=${String(budget.ceiling.timeoutMs)}ms 上限`,
+      nodeId,
+      agentId,
+    );
+  }
+}
+
+function checkBeforeModel(
+  budget: BudgetTracker | undefined,
+  nodeId: string | null,
+  agentId: string | null,
+  intendedMaxTokens: number = 1200,
+  promptText?: string,
+): number {
+  if (!budget) return intendedMaxTokens;
+  checkTimeout(budget, nodeId, agentId);
+  if (budget.missingUsage) {
+    throw new BudgetExceededError(
+      "budget.tokens",
+      "前置模型调用未返回有效 Token 用量，按保守策略停止后续模型调用",
+      nodeId,
+      agentId,
+    );
+  }
+  const remaining = budget.ceiling.maxTokens - budget.actualTokens;
+  if (budget.ceiling.maxTokens === 0 || remaining <= 0) {
+    throw new BudgetExceededError(
+      "budget.tokens",
+      `Token 用量 ${String(budget.actualTokens)} 已达 maxTokens=${String(budget.ceiling.maxTokens)} 上限`,
+      nodeId,
+      agentId,
+    );
+  }
+  if (promptText !== undefined) {
+    const estPrompt = estimatePromptTokens(promptText);
+    const availableForCompletion = remaining - estPrompt;
+    if (availableForCompletion <= 0) {
+      throw new BudgetExceededError(
+        "budget.tokens",
+        `估计输入 ${String(estPrompt)} 超过剩余预算 ${String(remaining)}，停止后续模型调用`,
+        nodeId,
+        agentId,
+      );
+    }
+    return Math.max(1, Math.min(intendedMaxTokens, Math.floor(availableForCompletion)));
+  }
+  return Math.max(1, Math.min(intendedMaxTokens, Math.floor(remaining)));
+}
+
+function recordLlmUsage(
+  state: InternalState,
+  budget: BudgetTracker | undefined,
+  usage: { readonly promptTokens?: number; readonly completionTokens?: number } | undefined,
+): void {
+  if (
+    usage !== undefined &&
+    typeof usage.promptTokens === "number" &&
+    Number.isFinite(usage.promptTokens) &&
+    typeof usage.completionTokens === "number" &&
+    Number.isFinite(usage.completionTokens)
+  ) {
+    const prompt = Math.max(0, usage.promptTokens);
+    const completion = Math.max(0, usage.completionTokens);
+    state.tokenUsage.promptTokens += prompt;
+    state.tokenUsage.completionTokens += completion;
+    if (budget) {
+      budget.actualTokens += prompt + completion;
+      budget.hasActualUsage = true;
+    }
+  } else if (budget) {
+    budget.missingUsage = true;
+  }
+}
+
+function computeUsageAccounting(state: InternalState, budget: BudgetTracker | undefined): UsageAccounting | undefined {
+  if (!budget) return undefined;
+  const deliberationTokens = (state.deliberation?.nodes ?? []).reduce((sum, node) => {
+    const u = (node as { usage?: { promptTokens?: number; completionTokens?: number } }).usage;
+    if (
+      !u ||
+      typeof u.promptTokens !== "number" ||
+      !Number.isFinite(u.promptTokens) ||
+      typeof u.completionTokens !== "number" ||
+      !Number.isFinite(u.completionTokens)
+    ) {
+      return sum;
+    }
+    return sum + Math.max(0, u.promptTokens) + Math.max(0, u.completionTokens);
+  }, 0);
+  const runnerTokens = state.tokenUsage.promptTokens + state.tokenUsage.completionTokens;
+  const totalActual = Math.max(budget.actualTokens, runnerTokens + deliberationTokens);
+  const predicted = budget.predictedTokens > 0 ? { predictedTokens: budget.predictedTokens } : {};
+  if (budget.missingUsage && !budget.hasActualUsage && totalActual === 0) {
+    return { source: "unknown", ...predicted, unknown: true };
+  }
+  if (budget.missingUsage) {
+    return {
+      source: "unknown",
+      actualTokens: totalActual,
+      ...predicted,
+      unknown: true,
+    };
+  }
+  return {
+    source: "actual",
+    actualTokens: totalActual,
+    ...predicted,
+    unknown: false,
+  };
+}
+
+function runTool(
+  events: RunEvent[],
+  nodeId: string,
+  tool: string,
+  agentId: string,
+  detail: string,
+  emit?: EmitEvent,
+  budget?: BudgetTracker,
+): void {
+  if (budget) {
+    checkTimeout(budget, nodeId, agentId);
+    if (budget.toolCalls >= budget.ceiling.maxToolCalls) {
+      throw new BudgetExceededError(
+        "budget.tool_calls",
+        `工具调用次数 ${String(budget.toolCalls)} 已达 maxToolCalls=${String(budget.ceiling.maxToolCalls)} 上限`,
+        nodeId,
+        agentId,
+      );
+    }
+    budget.toolCalls += 1;
+  }
   addEvent(events, "tool.called", `工具调用：${tool}`, detail, nodeId, agentId, emit);
 }
 
@@ -218,11 +416,11 @@ function verify(
   return item;
 }
 
-function executeResearch(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, strictEvidence = false): void {
+function executeResearch(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, strictEvidence = false, budget?: BudgetTracker): void {
   const agent = dispatch(state, events, "research", "intake", "识别商品链接与证据", iteration, emit);
   state.facts = analyzeProductInput({ text: state.taskText });
-  runTool(events, "research", "product.parse", agent, `${String(state.facts.links.length)} 条链接，${String(state.facts.fields.length)} 个候选字段，保留字段证据与待确认问题`, emit);
-  runTool(events, "research", "knowledge.search", agent, "检索平台规则、标题限制和费率边界", emit);
+  runTool(events, "research", "product.parse", agent, `${String(state.facts.links.length)} 条链接，${String(state.facts.fields.length)} 个候选字段，保留字段证据与待确认问题`, emit, budget);
+  runTool(events, "research", "knowledge.search", agent, "检索平台规则、标题限制和费率边界", emit, budget);
   addEvent(events, "node.output", "商品研究员提交证据包", `${state.facts.headline}；${String(state.facts.questions.length)} 个字段进入待确认，不把短链猜成商品详情`, "research", agent, emit);
   const base = defaultProduct(state.taskText, state.facts.patch);
   const given = parseTaskFacts(state.taskText);
@@ -324,19 +522,19 @@ function executeResearch(state: InternalState, events: RunEvent[], iteration: nu
   if (given.adDailyBudgetCents === null) state.assumptions.push(`任务没给推广预算，按演示假设 ${money(base.adDailyBudgetCents)}/天计算`);
 }
 
-function executeAccount(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
+function executeAccount(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, budget?: BudgetTracker): void {
   const agent = dispatch(state, events, "account", "cost", "核算成本与保本价", iteration, emit);
   if (state.product === null) throw new Error("product is missing before account");
   const breakEven = breakEvenCents(state.product);
   const unit = unitCost(state.product, breakEven);
   state.breakEvenCents = breakEven;
   state.unit = unit;
-  runTool(events, "account", "pricing.unit-cost", agent, `一件成本 ${money(unit.totalCents)}`, emit);
-  runTool(events, "account", "pricing.break-even", agent, `保本价 ${money(breakEven)}`, emit);
+  runTool(events, "account", "pricing.unit-cost", agent, `一件成本 ${money(unit.totalCents)}`, emit, budget);
+  runTool(events, "account", "pricing.break-even", agent, `保本价 ${money(breakEven)}`, emit, budget);
   addEvent(events, "node.output", "成本会计提交可审计计算", `成本 ${money(unit.totalCents)}；保本价 ${money(breakEven)}；输入假设已写入报告`, "account", agent, emit);
 }
 
-function executeMarket(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
+function executeMarket(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, budget?: BudgetTracker): void {
   const agent = dispatch(state, events, "market", "market", "生成价格策略与现金流情景", iteration, emit);
   if (state.product === null || state.unit === null || state.breakEvenCents <= 0) {
     throw new Error("account context is missing before market");
@@ -362,8 +560,9 @@ function executeMarket(state: InternalState, events: RunEvent[], iteration: numb
     agent,
     `生成 ${String(candidates.length)} 个策略：${candidates.map((candidate) => `${candidate.label} ${money(candidate.priceCents)}`).join("、")}`,
     emit,
+    budget,
   );
-  runTool(events, "market", "pricing.simulate", agent, "每个策略进行 30 天、200 次现金流模拟", emit);
+  runTool(events, "market", "pricing.simulate", agent, "每个策略进行 30 天、200 次现金流模拟", emit, budget);
   addEvent(
     events,
     "node.output",
@@ -381,7 +580,7 @@ function ownerForCheck(checkId: string): string {
   return "market-analyst";
 }
 
-function executeChallenge(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
+function executeChallenge(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, budget?: BudgetTracker): void {
   if (state.product === null || state.candidates.length === 0) return;
   const originalRecommendedId = (state.chosenId as CandidateId) ?? "match";
   const roles = [
@@ -393,7 +592,7 @@ function executeChallenge(state: InternalState, events: RunEvent[], iteration: n
     const nodeId = `challenge-${role}`;
     const agent = dispatch(state, events, nodeId, capability, "接收会计成本和市场三套报价，独立重算", iteration, emit);
     const analysis = analyzeCollaborationRole(role, state.product!, state.candidates);
-    runTool(events, nodeId, tool, agent, `${analysis.scenario}；${analysis.inputSummary}；逐策略复核毛利、p10、订单与备货资金`, emit);
+    runTool(events, nodeId, tool, agent, `${analysis.scenario}；${analysis.inputSummary}；逐策略复核毛利、p10、订单与备货资金`, emit, budget);
     addEvent(events, "node.output", `独立分析交付：${analysis.roleName}`,
       `${analysis.scenario}；${analysis.rows.map((r) => `${r.candidateId}：毛利${pct(r.margin)} / p10 ${money(r.p10Cents)} / 日单${r.orders.toFixed(1)} / 缺货${String(r.stockoutDays)}天`).join("；")}`,
       nodeId, agent, emit);
@@ -407,7 +606,7 @@ function executeChallenge(state: InternalState, events: RunEvent[], iteration: n
   const responses = respondToObjections(state.candidates, analyses).map((response) => ({
     ...response, owner: marketAgent, ownerName: state.agents.find((a) => a.id === marketAgent)?.name ?? "市场分析师",
   }));
-  runTool(events, "challenge-response", "pricing.verify", marketAgent, "报价责任人对照原报价与每条情景质询的数值证据；接收失败项不意味着已修复", emit);
+  runTool(events, "challenge-response", "pricing.verify", marketAgent, "报价责任人对照原报价与每条情景质询的数值证据；接收失败项不意味着已修复", emit, budget);
   for (const response of responses) {
     addEvent(events, "node.output", `质询回应：${response.ownerName}`,
       `${response.challenger} → ${response.targetCandidateId} / ${response.checkId}；${response.evidence}；${response.action}`,
@@ -415,14 +614,14 @@ function executeChallenge(state: InternalState, events: RunEvent[], iteration: n
   }
   const agent = dispatch(state, events, "challenge", "risk", "消费三方独立报告与报价责任人的逐项回应并裁决", iteration, emit);
   const collab = adjudicateCollaboration(state.product, state.candidates, originalRecommendedId, analyses, responses);
-  runTool(events, "challenge", "pricing.verify", agent, "按失败质询数、基准 p10 和原推荐顺序裁决；未解决失败项保留 fail", emit);
+  runTool(events, "challenge", "pricing.verify", agent, "按失败质询数、基准 p10 和原推荐顺序裁决；未解决失败项保留 fail", emit, budget);
   state.chosenId = collab.adjudicatedId;
   state.preferredCandidateId = collab.adjudicatedId;
   state.collaboration = collab;
   addEvent(events, "node.output", "三方交叉质询记录", `共提出 ${String(collab.objections.length)} 项质询，均有报价责任人回应；接收不等于风险消除`, "challenge", agent, emit);
   addEvent(events, "node.output", "风控裁决结论", collab.summary, "challenge", agent, emit);
 }
-function executeRisk(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): readonly Verification[] {
+function executeRisk(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, budget?: BudgetTracker): readonly Verification[] {
   const agent = dispatch(state, events, "risk", "risk", "独立验证成本、需求和策略", iteration, emit);
   const chosen = state.candidates.find((candidate) => candidate.id === state.chosenId) ?? state.candidates[0];
   const rows: RiskRow[] = [];
@@ -471,7 +670,7 @@ function executeRisk(state: InternalState, events: RunEvent[], iteration: number
       ? "warn"
       : "pass";
   state.risk = { level, rows };
-  runTool(events, "risk", "pricing.verify", agent, `${String(rows.length)} 项约束检查，结论 ${level}`, emit);
+  runTool(events, "risk", "pricing.verify", agent, `${String(rows.length)} 项约束检查，结论 ${level}`, emit, budget);
   const verdicts: Verification[] = [];
   for (const row of rows) {
     verdicts.push(verify(state, events, "risk", "risk-auditor", row.title, row.status, row.detail, "risk", agent, emit));
@@ -607,7 +806,7 @@ function planAdjustment(state: InternalState, nextIteration: number): PlannedAdj
 
 async function executeCopy(
   state: InternalState, events: RunEvent[], iteration: number, runId: string,
-  live: LiveLlm | null, emit?: EmitEvent,
+  live: LiveLlm | null, emit?: EmitEvent, budget?: BudgetTracker,
 ): Promise<AgentRun["llm"]> {
   const agent = dispatch(state, events, "copy", "copy", "生成平台上架文案", iteration, emit);
   const candidate = state.candidates.find((item) => item.id === state.chosenId) ?? state.candidates[0];
@@ -615,7 +814,7 @@ async function executeCopy(
   const preset = PLATFORM_PRESETS[state.product.platform];
   state.copy = buildCopy(state.product, preset, candidate.priceCents, state.breakEvenCents);
   state.bullets = candidate.bullets.map((bullet) => bullet.text);
-  runTool(events, "copy", "copy.generate", agent, "根据最终报价与已提供事实准备文案，保留本地初稿直至模型校验完成", emit);
+  runTool(events, "copy", "copy.generate", agent, "根据最终报价与已提供事实准备文案，保留本地初稿直至模型校验完成", emit, budget);
   addEvent(events, "node.output", live === null ? "文案 Agent 提交候选内容" : "文案 Agent 已接收最终方案",
     "标题受 " + String(preset.titleMax) + " 字限制；不写未验证的销量或极限词", "copy", agent, emit);
   if (live === null) { state.llm = RULE_LLM; return RULE_LLM; }
@@ -623,14 +822,36 @@ async function executeCopy(
     maxTitle: preset.titleMax, keywords: state.product.keywords, price: candidate.priceCents });
   let reason = "模型未完成";
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const attemptPrompt = prompt + (attempt === 2 ? "\n上次失败原因：" + reason + "。请修正后只返回规定 JSON。" : "");
+    const requestedMaxTokens = checkBeforeModel(budget, "copy", agent, 1200, attemptPrompt);
     try {
+      const remaining = budget ? Math.max(1, budget.ceiling.timeoutMs - (Date.now() - budget.startedAt)) : 45_000;
+      if (budget) {
+        budget.predictedTokens += requestedMaxTokens;
+      }
       const completion = await live.client.complete({
         runId: parseRunId(runId), round: iteration, nodeId: "copy", attempt,
-        prompt: prompt + (attempt === 2 ? "\n上次失败原因：" + reason + "。请修正后只返回规定 JSON。" : ""),
-        maxTokens: 1200, responseFormat: "json_object", reasoningEffort: "none", timeoutMs: 45_000,
+        prompt: attemptPrompt,
+        maxTokens: requestedMaxTokens, responseFormat: "json_object", reasoningEffort: "none", timeoutMs: Math.min(45_000, remaining),
       });
-      state.tokenUsage.promptTokens += Math.max(0, completion.usage.promptTokens);
-      state.tokenUsage.completionTokens += Math.max(0, completion.usage.completionTokens);
+      recordLlmUsage(state, budget, completion?.usage);
+      checkTimeout(budget, "copy", agent);
+      if (budget && budget.missingUsage) {
+        throw new BudgetExceededError(
+          "budget.tokens",
+          "模型未返回有效 Token 用量，按保守策略停止后续模型调用",
+          "copy",
+          agent,
+        );
+      }
+      if (budget && budget.actualTokens > budget.ceiling.maxTokens) {
+        throw new BudgetExceededError(
+          "budget.tokens",
+          `Token 用量 ${String(budget.actualTokens)} 超过 maxTokens=${String(budget.ceiling.maxTokens)} 上限`,
+          "copy",
+          agent,
+        );
+      }
       const checked = validateCopy(completion.text, preset.titleMax);
       if (!checked.ok) throw new Error(checked.reason);
       state.copy = { ...state.copy, titles: checked.value.titles.map((text) => ({ label: live.model, text, length: [...text].length })) };
@@ -639,6 +860,10 @@ async function executeCopy(
       addEvent(events, "llm.completed", "模型完成文案节点", live.model + " 生成 " + String(checked.value.titles.length) + " 个标题、" + String(checked.value.bullets.length) + " 条卖点，校验通过", "copy", agent, emit);
       return state.llm;
     } catch (error) {
+      if (error instanceof BudgetExceededError) {
+        throw error;
+      }
+      checkTimeout(budget, "copy", agent);
       reason = error instanceof Error ? error.message : "模型调用异常";
       if (attempt === 1 && !/HTTP (?:401|403)/.test(reason)) {
         addEvent(events, "llm.retrying", "文案校验后请求修订", reason + "；携带具体错误重新生成，最多重试一次", "copy", agent, emit);
@@ -650,7 +875,7 @@ async function executeCopy(
   return state.llm;
 }
 
-function executeReport(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent): void {
+function executeReport(state: InternalState, events: RunEvent[], iteration: number, emit?: EmitEvent, budget?: BudgetTracker): void {
   const agent = dispatch(state, events, "report", "report", "汇总可复核决策报告", iteration, emit);
   const candidate = state.candidates.find((item) => item.id === state.chosenId) ?? state.candidates[0];
   state.report = [
@@ -662,9 +887,12 @@ function executeReport(state: InternalState, events: RunEvent[], iteration: numb
         `会签裁决：${state.collaboration.summary}`,
         `协作证据：引用最终当前轮的三方规则分析与逐项回应；未消除失败项 ${String(state.collaboration.leftoverRisks.filter((row) => row.status === "fail").length)} 项。压力情景是规则假设，不是外部模型或实测市场结果。`,
       ] : []),
+    ...(state.citations && state.citations.length > 0
+      ? state.citations.map((c) => `检索引用 [${c.refId}]（${c.source}）：${c.title} — ${c.detail}`)
+      : []),
     ...state.assumptions,
   ];
-  runTool(events, "report", "report.compile", agent, "合并 Agent 输出、验证记录、调整原因和未解决问题", emit);
+  runTool(events, "report", "report.compile", agent, "合并 Agent 输出、验证记录、调整原因和未解决问题", emit, budget);
   addEvent(events, "node.output", "报告 Agent 提交审计报告", `${String(state.report.length)} 条报告记录，可根据事件链复现`, "report", agent, emit);
 }
 
@@ -690,6 +918,15 @@ function artifacts(state: InternalState): Artifacts {
     assumptions: state.assumptions,
     ...(state.collaboration ? { collaboration: state.collaboration } : {}),
     ...(state.deliberation ? { deliberation: state.deliberation } : {}),
+    ...(state.hasRetrievalOptIn ? { citations: state.citations ?? [] } : {}),
+    ...(state.decisionPack !== undefined ? { decisionPack: state.decisionPack } : {}),
+    ...(state.decisionAct !== undefined ? { decisionAct: state.decisionAct } : {}),
+    ...(state.decisionSource !== undefined ? { decisionSource: state.decisionSource } : {}),
+    ...(state.clarifiedFields !== undefined ? { clarifiedFields: state.clarifiedFields } : {}),
+    ...(state.consultedSourceIds !== undefined ? { consultedSourceIds: state.consultedSourceIds } : {}),
+    ...(state.decisionCompletionsUsed !== undefined ? { decisionCompletionsUsed: state.decisionCompletionsUsed } : {}),
+    ...(state.challengeTriggered !== undefined ? { challengeTriggered: state.challengeTriggered } : {}),
+    ...(state.challengeOutcome !== undefined ? { challengeOutcome: state.challengeOutcome } : {}),
   };
 }
 
@@ -699,8 +936,9 @@ function completeAfterApproval(
   iteration: number,
   setCompleted: () => void,
   emit?: EmitEvent,
+  budget?: BudgetTracker,
 ): void {
-  executeReport(state, events, iteration, emit);
+  executeReport(state, events, iteration, emit, budget);
   const finalAgent = dispatch(state, events, "final-check", "risk", "执行最终一致性验证", iteration, emit);
   verify(state, events, "final", "evidence", "证据链存在", state.facts !== null ? "pass" : "warn", "研究 Agent 已输出字段证据", "final-check", finalAgent, emit);
   verify(state, events, "final", "economics", "经济计算完整", state.unit !== null && state.breakEvenCents > 0 ? "pass" : "fail", "成本会计输出单件成本和保本价", "final-check", finalAgent, emit);
@@ -773,6 +1011,19 @@ function restoreState(run: AgentRun): { readonly state: InternalState; readonly 
       promptTokens: run.tokenUsage?.promptTokens ?? 0,
       completionTokens: run.tokenUsage?.completionTokens ?? 0,
     },
+    ...(run.artifacts.citations !== undefined ? { citations: run.artifacts.citations } : {}),
+    ...(run.artifacts.decisionPack !== undefined ? { decisionPack: run.artifacts.decisionPack } : {}),
+    ...(run.artifacts.decisionAct !== undefined ? { decisionAct: run.artifacts.decisionAct } : {}),
+    ...(run.artifacts.decisionSource !== undefined ? { decisionSource: run.artifacts.decisionSource } : {}),
+    ...(run.artifacts.clarifiedFields !== undefined ? { clarifiedFields: run.artifacts.clarifiedFields } : {}),
+    ...(run.artifacts.consultedSourceIds !== undefined ? { consultedSourceIds: run.artifacts.consultedSourceIds } : {}),
+    ...(run.artifacts.decisionCompletionsUsed !== undefined ? { decisionCompletionsUsed: run.artifacts.decisionCompletionsUsed } : {}),
+    ...(run.artifacts.challengeTriggered !== undefined ? { challengeTriggered: run.artifacts.challengeTriggered } : {}),
+    ...(run.artifacts.challengeOutcome !== undefined ? { challengeOutcome: run.artifacts.challengeOutcome } : {}),
+    protocolTraces: run.protocolTraces ? [...run.protocolTraces] : [],
+    protocolErrors: run.protocolErrors ? [...run.protocolErrors] : [],
+    hasProtocolOptIn: run.protocolTraces !== undefined || run.protocolErrors !== undefined,
+    hasRetrievalOptIn: run.artifacts.citations !== undefined,
   };
   return { state, iteration };
 }
@@ -785,7 +1036,98 @@ export type WorkflowRunOptions = {
   readonly singleAgent?: boolean | undefined;
   /** When false, skip the economic repair loop. Default true keeps v1 loop behaviour. */
   readonly economicLoop?: boolean | undefined;
+  readonly budgetCeiling?: BudgetCeiling | undefined;
+  readonly protocols?: ProtocolsConfig | undefined;
+  readonly retrieval?: RetrievalOptions | undefined;
+  readonly decisionReview?: DecisionReviewMode | undefined;
+  readonly maxDecisionCompletions?: number | undefined;
+  readonly evidenceSources?: readonly EvidenceSource[] | undefined;
 };
+
+function buildWorkflowForDecisionReview(
+  decisionReview: DecisionReviewMode,
+  live: LiveLlm | null,
+  enableCollaboration: boolean,
+  modelReview: boolean,
+): WorkflowDocument {
+  if (modelReview || (decisionReview === "multi-deliberation" && live !== null)) {
+    return {
+      ...COLLAB_WORKFLOW,
+      id: "product-launch-review.v3",
+      title: "商品上架评审 · 模型协作会审",
+      nodes: COLLAB_WORKFLOW.nodes.flatMap((node) =>
+        node.id === "copy"
+          ? [
+              { kind: "agent" as const, id: "model-review", capability: "risk" as const, title: "三方模型提案、主席质询和定向修订", dependsOn: ["risk-gate"] },
+              { ...node, dependsOn: ["model-review"] },
+            ]
+          : [node],
+      ),
+    };
+  }
+  if (decisionReview === "single-self-review" && live !== null) {
+    return {
+      ...COLLAB_WORKFLOW,
+      id: "product-launch-review.v3-single",
+      title: "商品上架评审 · 单模型自检决策",
+      nodes: COLLAB_WORKFLOW.nodes.flatMap((node) =>
+        node.id === "copy"
+          ? [
+              { kind: "agent" as const, id: "decision-single", capability: "risk" as const, title: "单模型初稿、工具校验与自检终审", dependsOn: ["risk-gate"] },
+              { ...node, dependsOn: ["decision-single"] },
+            ]
+          : [node],
+      ),
+    };
+  }
+  if (decisionReview === "multi-consensus" && live !== null) {
+    return {
+      ...COLLAB_WORKFLOW,
+      id: "product-launch-review.v3-consensus",
+      title: "商品上架评审 · 多角色并行共识与交叉核验",
+      nodes: COLLAB_WORKFLOW.nodes.flatMap((node) =>
+        node.id === "copy"
+          ? [
+              { kind: "agent" as const, id: "decision-consensus", capability: "risk" as const, title: "三角色并行独立裁决与分歧交叉核验", dependsOn: ["risk-gate"] },
+              { ...node, dependsOn: ["decision-consensus"] },
+            ]
+          : [node],
+      ),
+    };
+  }
+  return enableCollaboration ? COLLAB_WORKFLOW : DEFAULT_WORKFLOW;
+}
+
+function applyStrictEvidencePolicy(
+  state: InternalState,
+  events: RunEvent[],
+  emit?: EmitEvent,
+): boolean {
+  if (state.product === null) return false;
+  const facts = parseTaskFacts(state.taskText);
+  const unprofitable = isUnprofitableAtMarket(state.product);
+  const extra = [
+    ...(demandExceedsCash(facts) ? [demandDoubtRiskRow()] : []),
+    ...(unprofitable ? marketRejectRiskRows() : []),
+  ];
+  if (extra.length > 0) {
+    state.risk = mergeRiskRows(state.risk?.rows ?? [], extra);
+  }
+  if (unprofitable) {
+    state.gateDecision = "reject";
+    addEvent(
+      events,
+      "gate.decided",
+      "系统驳回上架方案",
+      "按竞品价核算无法保本且毛利为负；autoApprove 接受系统判定，而不是一律通过",
+      "approval",
+      "owner",
+      emit,
+    );
+    return true;
+  }
+  return false;
+}
 
 export async function runAgentWorkflow(
   input: { readonly id: string; readonly taskText: string; readonly autoApprove: boolean; readonly createdAt: string },
@@ -793,17 +1135,30 @@ export async function runAgentWorkflow(
   onEvent?: RunEventListener,
   options?: WorkflowRunOptions,
 ): Promise<AgentRun> {
-  const enableCollaboration = options?.collaboration ?? true;
-  const modelReview = enableCollaboration && live !== null && options?.modelReview !== false;
+  const budgetCeiling = options?.budgetCeiling;
+  if (budgetCeiling !== undefined) {
+    validateBudgetCeiling(budgetCeiling);
+  }
+  const budget: BudgetTracker | undefined = budgetCeiling
+    ? {
+        ceiling: budgetCeiling,
+        startedAt: Date.now(),
+        toolCalls: 0,
+        actualTokens: 0,
+        predictedTokens: 0,
+        hasActualUsage: false,
+        missingUsage: false,
+        stoppedReason: null,
+      }
+    : undefined;
+
+  const decisionReview: DecisionReviewMode = options?.decisionReview ?? "off";
+  const isDecisionReviewActive = decisionReview !== "off";
+  const enableCollaboration = isDecisionReviewActive ? true : (options?.collaboration ?? true);
+  const modelReview = !isDecisionReviewActive && enableCollaboration && live !== null && options?.modelReview !== false;
   const enableEconomicLoop = options?.economicLoop !== false;
   const singleAgent = options?.singleAgent === true;
-  const workflow: WorkflowDocument = modelReview ? {
-    ...COLLAB_WORKFLOW, id: "product-launch-review.v3", title: "商品上架评审 · 模型协作会审",
-    nodes: COLLAB_WORKFLOW.nodes.flatMap((node) => node.id === "copy" ? [
-      { kind: "agent" as const, id: "model-review", capability: "risk" as const, title: "三方模型提案、主席质询和定向修订", dependsOn: ["risk-gate"] },
-      { ...node, dependsOn: ["model-review"] },
-    ] : [node]),
-  } : enableCollaboration ? COLLAB_WORKFLOW : DEFAULT_WORKFLOW;
+  const workflow: WorkflowDocument = buildWorkflowForDecisionReview(decisionReview, live, enableCollaboration, modelReview);
   const agents = singleAgent ? [GENERALIST_AGENT] : enableCollaboration ? AGENTS : AGENTS_V1;
   const state = initialState(input.taskText, input.autoApprove, agents);
   const events: RunEvent[] = [];
@@ -816,141 +1171,620 @@ export async function runAgentWorkflow(
           onEvent(event, finalize(input, state, [...events], status, state.llm, iteration, workflow, agents));
         };
 
-  addEvent(events, "run.started", "任务开始", `工作流 ${workflow.title} · 目标：${workflow.intent}`, null, "planner", emit);
-  const planner = dispatch(state, events, "plan", "planning", "理解任务并生成执行计划", 1, emit);
-  runTool(events, "plan", "workflow.plan", planner, "确定交付依赖、验证门和最多 2 轮额外 Self-Loop 修正", emit);
-  addEvent(
-    events,
-    "node.output",
-    "规划 Agent 提交执行图",
-    enableCollaboration
-      ? "研究 → 成本会计 → 市场报价 → 三方独立分析 → 责任人回应 → 风控裁决 → 反馈循环 → 人工门 → 报告 → 最终校验"
-      : "研究 → 成本会计 → 市场报价 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验",
-    "plan",
-    planner,
-    emit,
-  );
+  try {
+    addEvent(events, "run.started", "任务开始", `工作流 ${workflow.title} · 目标：${workflow.intent}`, null, "planner", emit);
+    const planner = dispatch(state, events, "plan", "planning", "理解任务并生成执行计划", 1, emit);
+    runTool(events, "plan", "workflow.plan", planner, "确定交付依赖、验证门和最多 2 轮额外 Self-Loop 修正", emit, budget);
+    addEvent(
+      events,
+      "node.output",
+      "规划 Agent 提交执行图",
+      enableCollaboration
+        ? "研究 → 成本会计 → 市场报价 → 三方独立分析 → 责任人回应 → 风控裁决 → 反馈循环 → 人工门 → 报告 → 最终校验"
+        : "研究 → 成本会计 → 市场报价 → 风控验证 → 反馈循环 → 人工门 → 报告 → 最终校验",
+      "plan",
+      planner,
+      emit,
+    );
 
-  const strictEvidence = options?.strictEvidence === true;
-  executeResearch(state, events, 1, emit, strictEvidence);
-  if (strictEvidence && state.product === null) {
-    return finalize(input, state, events, "completed", state.llm, iteration, workflow, agents);
-  }
-  executeAccount(state, events, 1, emit);
-  executeMarket(state, events, 1, emit);
-  if (enableCollaboration) {
-    executeChallenge(state, events, 1, emit);
-  }
-  let lastRiskVerdicts = executeRisk(state, events, 1, emit);
-
-  while (enableEconomicLoop && state.risk?.level === "fail" && iteration < 3) {
-    const nextIteration = iteration + 1;
-    const planned = planAdjustment(state, nextIteration);
-    if (planned === null) {
-      break;
+    const strictEvidence = options?.strictEvidence === true;
+    executeResearch(state, events, 1, emit, strictEvidence, budget);
+    if (options?.protocols?.mcp?.enabled === true) {
+      state.hasProtocolOptIn = true;
+      const mcpConfig = options.protocols.mcp;
+      const mcpOutcome = await runMcpProtocolHook(mcpConfig);
+      state.protocolTraces.push(mcpOutcome.trace);
+      if (mcpOutcome.error) {
+        state.protocolErrors.push(mcpOutcome.error);
+      }
+      const toolLabel = `mcp.${mcpOutcome.trace.tool}`;
+      const detail = mcpOutcome.trace.ok
+        ? `MCP(${mcpOutcome.trace.serverName ?? "mcp"}) 成功返回 ${JSON.stringify(mcpOutcome.trace.result)}`
+        : `MCP(${mcpOutcome.trace.serverName ?? "mcp"}) 调用失败：${mcpOutcome.trace.error ?? "unknown error"}`;
+      runTool(events, "research", toolLabel, "link-researcher", detail, emit, budget);
     }
-    const before = captureSnapshot(state);
-    addEvent(events, "loop.iteration", `进入第 ${String(nextIteration)} 轮 Self-Loop`, "验证失败结果反馈给调度器，允许调整参数并重跑受影响分支", "adjust-loop", "planner", emit);
-    planned.apply();
-    state.adjustments.push(planned.reason);
-    addEvent(events, "loop.adjusted", "反馈优化：调整策略参数", planned.reason, "adjust-loop", "risk-auditor", emit);
-    executeMarket(state, events, nextIteration, emit);
+    if (options?.retrieval?.enabled === true) {
+      state.hasRetrievalOptIn = true;
+      state.hasProtocolOptIn = true;
+      const retrievalOutcome = await runRetrievalHook(options.retrieval);
+      state.citations = retrievalOutcome.citations;
+      state.protocolTraces.push(retrievalOutcome.trace);
+      if (retrievalOutcome.error) {
+        state.protocolErrors.push(retrievalOutcome.error);
+      }
+      const detail = retrievalOutcome.trace.ok
+        ? `检索命中 ${String(retrievalOutcome.citations.length)} 条参考：${retrievalOutcome.citations.map((c) => c.refId).join("、") || "无"}`
+        : `检索失败：${retrievalOutcome.trace.error ?? "unknown error"}`;
+      runTool(events, "research", "retrieval.knowledge.search", "link-researcher", detail, emit, budget);
+    }
+    if (strictEvidence && state.product === null) {
+      if (budget) {
+        state.usageAccounting = computeUsageAccounting(state, budget);
+      }
+      return finalize(input, state, events, "completed", state.llm, iteration, workflow, agents);
+    }
+    executeAccount(state, events, 1, emit, budget);
+    executeMarket(state, events, 1, emit, budget);
     if (enableCollaboration) {
-      executeChallenge(state, events, nextIteration, emit);
+      executeChallenge(state, events, 1, emit, budget);
     }
-    const retryVerdicts = executeRisk(state, events, nextIteration, emit);
-    const after = captureSnapshot(state);
-    state.loops.push({
-      role: planned.role,
-      iteration: nextIteration,
-      verdicts: [...lastRiskVerdicts],
-      adjustment: planned.reason,
-      action: planned.action,
-      before,
-      after,
-    });
-    lastRiskVerdicts = retryVerdicts;
-    iteration = nextIteration;
-  }
+    let lastRiskVerdicts = executeRisk(state, events, 1, emit, budget);
 
-  // Model review consumes the final numeric reports once; economic repair loops do not multiply model calls.
-  if (modelReview && live !== null && state.product !== null && state.collaboration !== undefined) {
-    state.deliberation = await runDeliberation({ runId: input.id, round: iteration,
-      product: state.product, candidates: state.candidates, collaboration: state.collaboration, live,
-      onUpdate: (artifact, update) => {
-        state.deliberation = artifact;
-        const type: RunEvent["type"] = update.type === "finished" ? "node.output" : ("review." + update.type) as RunEvent["type"];
-        addEvent(events, type, update.type === "finished" ? "模型会审汇总完成" : "模型会审 · " + update.nodeId,
-          update.detail, update.nodeId, update.role === "chair" ? "risk-auditor" : update.role, emit);
-      },
-    });
-    const decision = state.deliberation.decision;
-    if (decision !== null) {
-      const previous = state.collaboration.adjudicatedId;
-      state.chosenId = decision.recommendedId;
-      state.preferredCandidateId = decision.recommendedId;
-      const labelOf = (id: string): string => state.candidates.find((item) => item.id === id)?.label ?? id;
-      state.collaboration = { ...state.collaboration,
-        adjudicatedId: decision.recommendedId,
-        changed: decision.recommendedId !== state.collaboration.originalRecommendedId,
-        summary: "数值初选「" + labelOf(previous) + "」，模型会审后选择「" + labelOf(decision.recommendedId) + "」。" + decision.reason,
-        ...(state.collaboration.comparison === undefined ? {} : {
-          comparison: state.collaboration.comparison.map((row) => ({ ...row, selected: row.candidateId === decision.recommendedId })),
-        }),
-        leftoverRisks: state.collaboration.objections.filter((row) => row.targetCandidateId === decision.recommendedId).map((row) => ({
-          id: "collab-" + row.checkId + "-" + row.challenger, title: "会签质询 · " + row.title,
-          status: row.status, detail: row.detail, owner: "market-analyst",
-        })),
-      };
-      // A changed model preference receives a fresh independent numerical check.
-      if (previous !== decision.recommendedId) executeRisk(state, events, iteration, emit);
+    while (enableEconomicLoop && state.risk?.level === "fail" && iteration < 3) {
+      checkTimeout(budget, "adjust-loop", "planner");
+      const nextIteration = iteration + 1;
+      const planned = planAdjustment(state, nextIteration);
+      if (planned === null) {
+        break;
+      }
+      const before = captureSnapshot(state);
+      addEvent(events, "loop.iteration", `进入第 ${String(nextIteration)} 轮 Self-Loop`, "验证失败结果反馈给调度器，允许调整参数并重跑受影响分支", "adjust-loop", "planner", emit);
+      planned.apply();
+      state.adjustments.push(planned.reason);
+      addEvent(events, "loop.adjusted", "反馈优化：调整策略参数", planned.reason, "adjust-loop", "risk-auditor", emit);
+      executeMarket(state, events, nextIteration, emit, budget);
+      if (enableCollaboration) {
+        executeChallenge(state, events, nextIteration, emit, budget);
+      }
+      const retryVerdicts = executeRisk(state, events, nextIteration, emit, budget);
+      const after = captureSnapshot(state);
+      state.loops.push({
+        role: planned.role,
+        iteration: nextIteration,
+        verdicts: [...lastRiskVerdicts],
+        adjustment: planned.reason,
+        action: planned.action,
+        before,
+        after,
+      });
+      lastRiskVerdicts = retryVerdicts;
+      iteration = nextIteration;
     }
-  }
 
-  if (strictEvidence && state.product !== null) {
-    const facts = parseTaskFacts(state.taskText);
-    const extra = [
-      ...(demandExceedsCash(facts) ? [demandDoubtRiskRow()] : []),
-      ...(isUnprofitableAtMarket(state.product) ? marketRejectRiskRows() : []),
-    ];
-    if (extra.length > 0) {
-      state.risk = mergeRiskRows(state.risk?.rows ?? [], extra);
-    }
-    if (isUnprofitableAtMarket(state.product)) {
-      state.gateDecision = "reject";
-      addEvent(
-        events,
-        "gate.decided",
-        "系统驳回上架方案",
-        "按竞品价核算无法保本且毛利为负；autoApprove 接受系统判定，而不是一律通过",
-        "approval",
-        "owner",
-        emit,
-      );
+    const applyStrictAndMaybeReject = (): boolean => {
+      if (!strictEvidence) return false;
+      return applyStrictEvidencePolicy(state, events, emit);
+    };
+
+    // Apply deterministic strictEvidence market reject before model-review so unprofitable cases
+    // do not waste review budget and cannot be bypassed by a budget stop.
+    if (applyStrictAndMaybeReject()) {
+      if (budget) {
+        state.usageAccounting = computeUsageAccounting(state, budget);
+      }
       return finalize(input, state, events, "rejected", state.llm, iteration, workflow, agents);
     }
-  }
 
-  const llm = await executeCopy(state, events, iteration, input.id, live, emit);
-  if (!input.autoApprove) {
-    status = "awaiting-approval";
+    if (isDecisionReviewActive && live !== null && state.product !== null) {
+      const evidenceSources = options?.evidenceSources;
+      const pack = buildDecisionPack({
+        taskText: state.taskText,
+        product: state.product,
+        breakEvenCents: state.breakEvenCents,
+        candidates: state.candidates,
+        collaboration: state.collaboration,
+        ...(evidenceSources && evidenceSources.length > 0 ? { evidenceSources } : {}),
+      });
+      state.decisionPack = pack;
+
+      const preflightClarifiedFields: string[] = [];
+      for (const question of state.facts?.questions ?? []) {
+        if (question.id === "ask-buy") preflightClarifiedFields.push("buy");
+        if (question.id === "ask-shipping") preflightClarifiedFields.push("shipping");
+        if (question.id === "ask-competitor") preflightClarifiedFields.push("competitor");
+      }
+
+      const maxDecisionCompletions = options?.maxDecisionCompletions ?? 8;
+      let episodeStop = null as { reason: BudgetStopReason; detail: string } | null;
+      const decisionBudgetHooks =
+        budget || decisionReview === "single-self-review" || decisionReview === "multi-consensus"
+          ? {
+              maxTokens: budget ? budget.ceiling.maxTokens : Number.POSITIVE_INFINITY,
+              maxToolCalls: budget ? budget.ceiling.maxToolCalls : Number.POSITIVE_INFINITY,
+              runStartedAt: budget ? budget.startedAt : Date.now(),
+              timeoutMs: budget ? budget.ceiling.timeoutMs : 60_000,
+              usedTokens: () => (budget ? budget.actualTokens : 0),
+              usedToolCalls: () => (budget ? budget.toolCalls : 0),
+              hasUnknownUsage: () => (budget ? budget.missingUsage : false),
+              recordPredictedTokens: (tokens: number) => {
+                if (budget) budget.predictedTokens += tokens;
+              },
+              recordUsage: (usage: { readonly promptTokens?: number; readonly completionTokens?: number } | undefined) => {
+                if (
+                  usage !== undefined &&
+                  typeof usage.promptTokens === "number" &&
+                  Number.isFinite(usage.promptTokens) &&
+                  typeof usage.completionTokens === "number" &&
+                  Number.isFinite(usage.completionTokens)
+                ) {
+                  const prompt = Math.max(0, usage.promptTokens);
+                  const completion = Math.max(0, usage.completionTokens);
+                  if (decisionReview === "single-self-review" || decisionReview === "multi-consensus") {
+                    state.tokenUsage.promptTokens += prompt;
+                    state.tokenUsage.completionTokens += completion;
+                  }
+                  if (budget) {
+                    budget.actualTokens += prompt + completion;
+                    budget.hasActualUsage = true;
+                  }
+                } else if (budget) {
+                  budget.missingUsage = true;
+                }
+              },
+              onStop: (reason: BudgetStopReason, detail: string) => {
+                if (budget && episodeStop === null) {
+                  episodeStop = { reason, detail };
+                }
+              },
+            }
+          : undefined;
+
+      let candidateAct: import("./decision-act.js").DecisionAct | null = null;
+      let completionsUsedFromEpisode = 0;
+      const previousChosen = state.chosenId;
+
+      if (decisionReview === "single-self-review") {
+        checkBeforeModel(budget, "decision-single-draft", "generalist");
+        const singleResult = await runSingleSelfReview({
+          runId: input.id,
+          round: iteration,
+          product: state.product,
+          candidates: state.candidates,
+          pack,
+          live,
+          ...(evidenceSources && evidenceSources.length > 0 ? { evidenceSources } : {}),
+          maxDecisionCompletions,
+          ...(decisionBudgetHooks ? { budget: decisionBudgetHooks } : {}),
+          onNodeEvent: (type, nodeId, detail) => {
+            addEvent(events, type, `单模型决策 · ${nodeId}`, detail, nodeId, "generalist", emit);
+          },
+        });
+        completionsUsedFromEpisode = singleResult.completionsUsed;
+        state.decisionCompletionsUsed = singleResult.completionsUsed;
+        if (evidenceSources && evidenceSources.length > 0) {
+          state.consultedSourceIds = singleResult.consultedSourceIds;
+        }
+        for (const toolReceipt of singleResult.toolCalls) {
+          addEvent(
+            events,
+            "tool.called",
+            `工具调用：${toolReceipt.tool}`,
+            toolReceipt.summary,
+            "decision-single-tools",
+            "generalist",
+            emit,
+          );
+        }
+        if (budget) {
+          budget.toolCalls += singleResult.toolCalls.length;
+        }
+        if (episodeStop !== null) {
+          const stop = episodeStop as { reason: BudgetStopReason; detail: string };
+          throw new BudgetExceededError(stop.reason, stop.detail, "decision-single", "generalist");
+        }
+        checkTimeout(budget, "decision-single", "generalist");
+        if (budget && budget.missingUsage) {
+          throw new BudgetExceededError(
+            "budget.tokens",
+            "模型未返回有效 Token 用量，按保守策略停止后续模型调用",
+            "decision-single",
+            "generalist",
+          );
+        }
+        if (budget && budget.actualTokens > budget.ceiling.maxTokens) {
+          throw new BudgetExceededError(
+            "budget.tokens",
+            `Token 用量 ${String(budget.actualTokens)} 超过 maxTokens=${String(budget.ceiling.maxTokens)} 上限`,
+            "decision-single",
+            "generalist",
+          );
+        }
+        candidateAct = singleResult.act;
+      } else if (decisionReview === "multi-deliberation" && state.collaboration !== undefined) {
+        checkBeforeModel(budget, "model-review", "risk-auditor");
+        state.deliberation = await runDeliberation({
+          runId: input.id,
+          round: iteration,
+          product: state.product,
+          candidates: state.candidates,
+          collaboration: state.collaboration,
+          live,
+          decisionReview: true,
+          decisionPack: pack,
+          ...(evidenceSources && evidenceSources.length > 0 ? { evidenceSources } : {}),
+          maxDecisionCompletions,
+          ...(decisionBudgetHooks ? { budget: decisionBudgetHooks } : {}),
+          onUpdate: (artifact, update) => {
+            state.deliberation = artifact;
+            const type: RunEvent["type"] =
+              update.type === "finished" ? "node.output" : (`review.${update.type}` as RunEvent["type"]);
+            addEvent(
+              events,
+              type,
+              update.type === "finished" ? "模型会审汇总完成" : `模型会审 · ${update.nodeId}`,
+              update.detail,
+              update.nodeId,
+              update.role === "chair" ? "risk-auditor" : update.role,
+              emit,
+            );
+          },
+        });
+        if (budget) {
+          budget.toolCalls += state.deliberation.toolCalls?.length ?? 0;
+        }
+        if (state.deliberation.completionsUsed !== undefined) {
+          state.decisionCompletionsUsed = state.deliberation.completionsUsed;
+        }
+        if (evidenceSources && evidenceSources.length > 0 && state.deliberation.consultedSourceIds !== undefined) {
+          state.consultedSourceIds = state.deliberation.consultedSourceIds;
+        }
+        if (episodeStop !== null) {
+          const stop = episodeStop as { reason: BudgetStopReason; detail: string };
+          throw new BudgetExceededError(stop.reason, stop.detail, "model-review", "risk-auditor");
+        }
+        checkTimeout(budget, "model-review", "risk-auditor");
+        if (budget && budget.missingUsage) {
+          throw new BudgetExceededError(
+            "budget.tokens",
+            "模型未返回有效 Token 用量，按保守策略停止后续模型调用",
+            "model-review",
+            "risk-auditor",
+          );
+        }
+        if (budget && budget.actualTokens > budget.ceiling.maxTokens) {
+          throw new BudgetExceededError(
+            "budget.tokens",
+            `Token 用量 ${String(budget.actualTokens)} 超过 maxTokens=${String(budget.ceiling.maxTokens)} 上限`,
+            "model-review",
+            "risk-auditor",
+          );
+        }
+        candidateAct = state.deliberation.verdictAct ?? null;
+      } else if (decisionReview === "multi-consensus") {
+        checkBeforeModel(budget, "decision-consensus", "risk-auditor");
+        const consensusResult = await runMultiConsensus({
+          runId: input.id,
+          round: iteration,
+          product: state.product,
+          candidates: state.candidates,
+          pack,
+          live,
+          ...(evidenceSources && evidenceSources.length > 0 ? { evidenceSources } : {}),
+          maxDecisionCompletions,
+          ...(decisionBudgetHooks ? { budget: decisionBudgetHooks } : {}),
+          onNodeEvent: (event) => {
+            addEvent(
+              events,
+              `review.${event.type}`,
+              `并行共识 · ${event.nodeId}`,
+              event.detail,
+              event.nodeId,
+              event.role === "crosscheck" ? "risk-auditor" : event.role,
+              emit,
+            );
+          },
+        });
+        completionsUsedFromEpisode = consensusResult.completionsUsed;
+        state.decisionCompletionsUsed = consensusResult.completionsUsed;
+        state.challengeTriggered = consensusResult.challengeTriggered;
+        state.challengeOutcome = consensusResult.challengeOutcome;
+        if (evidenceSources && evidenceSources.length > 0) {
+          state.consultedSourceIds = consensusResult.consultedSourceIds;
+        }
+        for (const toolReceipt of consensusResult.toolCalls) {
+          addEvent(
+            events,
+            "tool.called",
+            `工具调用：${toolReceipt.tool}`,
+            toolReceipt.summary,
+            "decision-consensus-tools",
+            toolReceipt.callerRole,
+            emit,
+          );
+        }
+        if (budget) {
+          budget.toolCalls += consensusResult.toolCalls.length;
+        }
+        if (episodeStop !== null) {
+          const stop = episodeStop as { reason: BudgetStopReason; detail: string };
+          throw new BudgetExceededError(stop.reason, stop.detail, "decision-consensus", "risk-auditor");
+        }
+        checkTimeout(budget, "decision-consensus", "risk-auditor");
+        if (budget && budget.missingUsage) {
+          throw new BudgetExceededError(
+            "budget.tokens",
+            "模型未返回有效 Token 用量，按保守策略停止后续模型调用",
+            "decision-consensus",
+            "risk-auditor",
+          );
+        }
+        if (budget && budget.actualTokens > budget.ceiling.maxTokens) {
+          throw new BudgetExceededError(
+            "budget.tokens",
+            `Token 用量 ${String(budget.actualTokens)} 超过 maxTokens=${String(budget.ceiling.maxTokens)} 上限`,
+            "decision-consensus",
+            "risk-auditor",
+          );
+        }
+        candidateAct = consensusResult.act;
+      }
+
+      if (candidateAct === null) {
+        const exhaustedSingle = decisionReview === "single-self-review" && completionsUsedFromEpisode >= maxDecisionCompletions;
+        const exhaustedMulti = decisionReview === "multi-deliberation" && (state.deliberation?.completionsUsed ?? 0) >= maxDecisionCompletions;
+        const exhaustedConsensus = decisionReview === "multi-consensus" && completionsUsedFromEpisode >= maxDecisionCompletions;
+        if (exhaustedSingle || exhaustedMulti || exhaustedConsensus) {
+          state.stopReason = "budget.completions";
+          addEvent(
+            events,
+            "budget.exceeded",
+            "决策调用次数已达上限",
+            `已消耗 ${String(maxDecisionCompletions)} 次决策模型调用仍未产生合法 DecisionAct，按未完成停止`,
+            "decision-review",
+            "risk-auditor",
+            emit,
+          );
+          if (budget) {
+            state.usageAccounting = computeUsageAccounting(state, budget);
+          }
+          return finalize(input, state, events, "stopped", state.llm, iteration, workflow, agents);
+        }
+        state.stopReason = episodeStop?.reason ?? "budget.completions";
+        addEvent(
+          events,
+          "budget.exceeded",
+          "决策未能产出终局裁决",
+          episodeStop?.detail ?? "模型决策阶段未能产出合法 DecisionAct，按未完成停止",
+          "decision-review",
+          "risk-auditor",
+          emit,
+        );
+        if (budget) {
+          state.usageAccounting = computeUsageAccounting(state, budget);
+        }
+        return finalize(input, state, events, "stopped", state.llm, iteration, workflow, agents);
+      }
+
+      const applied = applyDecisionAct({
+        act: candidateAct,
+        product: state.product,
+        candidates: state.candidates,
+        fallbackChosenId: previousChosen,
+        minFailCandidateIds: pack.minFailCandidateIds,
+        preflightClarifiedFields,
+      });
+      state.decisionAct = applied.decisionAct;
+      state.decisionSource = applied.decisionSource;
+      if (applied.clarifiedFields.length > 0) {
+        state.clarifiedFields = applied.clarifiedFields;
+      }
+
+      if (applied.appliedAction === "reject") {
+        state.gateDecision = "reject";
+        state.report = [];
+        addEvent(
+          events,
+          "gate.decided",
+          "结构化决策驳回上架方案",
+          applied.decisionAct.summary,
+          "approval",
+          "owner",
+          emit,
+        );
+        if (budget) {
+          state.usageAccounting = computeUsageAccounting(state, budget);
+        }
+        return finalize(input, state, events, "rejected", state.llm, iteration, workflow, agents);
+      }
+
+      if (applied.appliedAction === "approve" && applied.chosenId !== null) {
+        const nextChosen = applied.chosenId as CandidateId;
+        state.chosenId = nextChosen;
+        state.preferredCandidateId = nextChosen;
+        if (state.collaboration !== undefined) {
+          const labelOf = (id: string): string => state.candidates.find((item) => item.id === id)?.label ?? id;
+          state.collaboration = {
+            ...state.collaboration,
+            adjudicatedId: nextChosen,
+            changed: nextChosen !== state.collaboration.originalRecommendedId,
+            summary:
+              previousChosen !== nextChosen
+                ? `数值初选「${labelOf(previousChosen ?? "")}」，结构化决策后选择「${labelOf(nextChosen)}」。${applied.decisionAct.summary}`
+                : `${state.collaboration.summary}；结构化决策确认「${labelOf(nextChosen)}」。`,
+            ...(state.collaboration.comparison === undefined
+              ? {}
+              : {
+                  comparison: state.collaboration.comparison.map((row) => ({
+                    ...row,
+                    selected: row.candidateId === nextChosen,
+                  })),
+                }),
+            leftoverRisks: state.collaboration.objections
+              .filter((row) => row.targetCandidateId === nextChosen)
+              .map((row) => ({
+                id: `collab-${row.checkId}-${row.challenger}`,
+                title: `会签质询 · ${row.title}`,
+                status: row.status,
+                detail: row.detail,
+                owner: "market-analyst",
+              })),
+          };
+        }
+        if (previousChosen !== nextChosen) {
+          executeRisk(state, events, iteration, emit, budget);
+        }
+      }
+    }
+
+    // Model review consumes the final numeric reports once; economic repair loops do not multiply model calls.
+    if (modelReview && live !== null && state.product !== null && state.collaboration !== undefined) {
+      checkBeforeModel(budget, "model-review", "risk-auditor");
+      let deliberationStop: { reason: BudgetStopReason; detail: string } | null = null;
+      state.deliberation = await runDeliberation({ runId: input.id, round: iteration,
+        product: state.product, candidates: state.candidates, collaboration: state.collaboration, live,
+        ...(budget ? {
+          budget: {
+            maxTokens: budget.ceiling.maxTokens,
+            maxToolCalls: budget.ceiling.maxToolCalls,
+            runStartedAt: budget.startedAt,
+            timeoutMs: budget.ceiling.timeoutMs,
+            usedTokens: () => budget.actualTokens,
+            usedToolCalls: () => budget.toolCalls,
+            hasUnknownUsage: () => budget.missingUsage,
+            recordPredictedTokens: (tokens) => {
+              budget.predictedTokens += tokens;
+            },
+            recordUsage: (usage) => {
+              if (
+                usage !== undefined &&
+                typeof usage.promptTokens === "number" &&
+                Number.isFinite(usage.promptTokens) &&
+                typeof usage.completionTokens === "number" &&
+                Number.isFinite(usage.completionTokens)
+              ) {
+                budget.actualTokens += Math.max(0, usage.promptTokens) + Math.max(0, usage.completionTokens);
+                budget.hasActualUsage = true;
+              } else {
+                budget.missingUsage = true;
+              }
+            },
+            onStop: (reason, detail) => {
+              if (deliberationStop === null) {
+                deliberationStop = { reason, detail };
+              }
+            },
+          },
+        } : {}),
+        onUpdate: (artifact, update) => {
+          state.deliberation = artifact;
+          const type: RunEvent["type"] = update.type === "finished" ? "node.output" : ("review." + update.type) as RunEvent["type"];
+          addEvent(events, type, update.type === "finished" ? "模型会审汇总完成" : "模型会审 · " + update.nodeId,
+            update.detail, update.nodeId, update.role === "chair" ? "risk-auditor" : update.role, emit);
+        },
+      });
+      if (budget) {
+        budget.toolCalls += state.deliberation.toolCalls?.length ?? 0;
+      }
+            if (deliberationStop !== null) {
+        const stop = deliberationStop as { reason: BudgetStopReason; detail: string };
+        throw new BudgetExceededError(stop.reason, stop.detail, "model-review", "risk-auditor");
+      }
+      checkTimeout(budget, "model-review", "risk-auditor");
+      if (budget && budget.missingUsage) {
+        throw new BudgetExceededError(
+          "budget.tokens",
+          "模型未返回有效 Token 用量，按保守策略停止后续模型调用",
+          "model-review",
+          "risk-auditor",
+        );
+      }
+      if (budget && budget.actualTokens > budget.ceiling.maxTokens) {
+        throw new BudgetExceededError(
+          "budget.tokens",
+          `Token 用量 ${String(budget.actualTokens)} 超过 maxTokens=${String(budget.ceiling.maxTokens)} 上限`,
+          "model-review",
+          "risk-auditor",
+        );
+      }
+      const decision = state.deliberation.decision;
+      if (decision !== null) {
+        const previous = state.collaboration.adjudicatedId;
+        state.chosenId = decision.recommendedId;
+        state.preferredCandidateId = decision.recommendedId;
+        const labelOf = (id: string): string => state.candidates.find((item) => item.id === id)?.label ?? id;
+        state.collaboration = { ...state.collaboration,
+          adjudicatedId: decision.recommendedId,
+          changed: decision.recommendedId !== state.collaboration.originalRecommendedId,
+          summary: "数值初选「" + labelOf(previous) + "」，模型会审后选择「" + labelOf(decision.recommendedId) + "」。" + decision.reason,
+          ...(state.collaboration.comparison === undefined ? {} : {
+            comparison: state.collaboration.comparison.map((row) => ({ ...row, selected: row.candidateId === decision.recommendedId })),
+          }),
+          leftoverRisks: state.collaboration.objections.filter((row) => row.targetCandidateId === decision.recommendedId).map((row) => ({
+            id: "collab-" + row.checkId + "-" + row.challenger, title: "会签质询 · " + row.title,
+            status: row.status, detail: row.detail, owner: "market-analyst",
+          })),
+        };
+        // A changed model preference receives a fresh independent numerical check.
+        if (previous !== decision.recommendedId) executeRisk(state, events, iteration, emit, budget);
+      }
+    }
+
+    if (applyStrictAndMaybeReject()) {
+      if (budget) {
+        state.usageAccounting = computeUsageAccounting(state, budget);
+      }
+      return finalize(input, state, events, "rejected", state.llm, iteration, workflow, agents);
+    }
+
+    const llm = await executeCopy(state, events, iteration, input.id, live, emit, budget);
+    if (!input.autoApprove) {
+      status = "awaiting-approval";
+    }
+    addEvent(events, "gate.awaiting", "等待人工确认", "这是高风险动作的人工介入节点：请确认成本假设、未解析字段和推荐策略", "approval", "owner", emit);
+    if (!input.autoApprove) {
+      if (budget) {
+        state.usageAccounting = computeUsageAccounting(state, budget);
+      }
+      return finalize(input, state, events, "awaiting-approval", llm, iteration, workflow, agents);
+    }
+    state.gateNeeded = false;
+    addEvent(events, "gate.autoApproved", "演示模式自动通过人工门", "autoApprove=true；正式部署应由用户点击确认", "approval", "owner", emit);
+    completeAfterApproval(
+      state,
+      events,
+      iteration,
+      () => {
+        status = "completed";
+      },
+      emit,
+      budget,
+    );
+    if (budget) {
+      state.usageAccounting = computeUsageAccounting(state, budget);
+    }
+    return finalize(input, state, events, "completed", llm, iteration, workflow, agents);
+  } catch (error) {
+    if (error instanceof BudgetExceededError) {
+      state.stopReason = error.reason;
+      if (budget) {
+        state.usageAccounting = computeUsageAccounting(state, budget);
+      }
+      addEvent(
+        events,
+        "budget.exceeded",
+        `触发预算上限（${error.reason}）`,
+        error.detail,
+        error.nodeId,
+        error.agentId,
+        emit,
+      );
+      if (options?.strictEvidence === true && applyStrictEvidencePolicy(state, events, emit)) {
+        return finalize(input, state, events, "rejected", state.llm, iteration, workflow, agents);
+      }
+      return finalize(input, state, events, "stopped", state.llm, iteration, workflow, agents);
+    }
+    throw error;
   }
-  addEvent(events, "gate.awaiting", "等待人工确认", "这是高风险动作的人工介入节点：请确认成本假设、未解析字段和推荐策略", "approval", "owner", emit);
-  if (!input.autoApprove) {
-    return finalize(input, state, events, "awaiting-approval", llm, iteration, workflow, agents);
-  }
-  state.gateNeeded = false;
-  addEvent(events, "gate.autoApproved", "演示模式自动通过人工门", "autoApprove=true；正式部署应由用户点击确认", "approval", "owner", emit);
-  completeAfterApproval(
-    state,
-    events,
-    iteration,
-    () => {
-      status = "completed";
-    },
-    emit,
-  );
-  return finalize(input, state, events, "completed", llm, iteration, workflow, agents);
 }
 
 export async function resumeAgentWorkflow(
@@ -1089,6 +1923,14 @@ function finalize(
     loads,
     calls,
     tokenUsage: { promptTokens: state.tokenUsage.promptTokens, completionTokens: state.tokenUsage.completionTokens },
+    ...(state.stopReason !== undefined ? { stopReason: state.stopReason } : {}),
+    ...(state.usageAccounting !== undefined ? { usageAccounting: state.usageAccounting } : {}),
+    ...(state.hasProtocolOptIn
+      ? {
+          protocolTraces: [...state.protocolTraces],
+          protocolErrors: [...state.protocolErrors],
+        }
+      : {}),
     scheduler: {
       loads,
       calls,

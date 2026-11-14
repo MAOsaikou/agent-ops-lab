@@ -23,6 +23,8 @@ export const TOOL_NAMES = [
   "pricing.verify",
   "knowledge.search",
   "product.parse",
+  "sources.list",
+  "sources.read",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -41,6 +43,8 @@ export const TOOL_WHITELIST: readonly ToolSpec[] = [
   { name: "pricing.verify", title: "定价约束与风控检查", kind: "compute" },
   { name: "knowledge.search", title: "平台规则与费率检索", kind: "kb" },
   { name: "product.parse", title: "商品事实解析", kind: "parse" },
+  { name: "sources.list", title: "补充资料目录查询", kind: "kb" },
+  { name: "sources.read", title: "补充资料正文读取", kind: "kb" },
 ];
 
 const productInputSchema: z.ZodType<ProductInput> = z.strictObject({
@@ -103,6 +107,26 @@ const knowledgeSearchParamsSchema = z.strictObject({
 
 const productParseParamsSchema = z.strictObject({
   text: z.string().min(1).max(20_000),
+});
+
+const evidenceSourceMetaSchema = z.strictObject({
+  id: z.string().min(1).max(100),
+  title: z.string().min(1).max(200),
+  kind: z.string().max(100).optional(),
+  body: z.string().optional(),
+});
+
+const sourcesListParamsSchema = z.strictObject({
+  sources: z.array(evidenceSourceMetaSchema).default([]),
+});
+
+const sourcesReadParamsSchema = z.strictObject({
+  sources: z.array(evidenceSourceMetaSchema),
+  sourceIds: z
+    .array(z.string().min(1).max(100))
+    .min(1)
+    .max(2)
+    .refine((ids) => new Set(ids).size === ids.length, "sourceIds 不得重复"),
 });
 
 export type ToolCallRequest<T = unknown> = {
@@ -207,7 +231,7 @@ export async function dispatchToolCall<T = unknown>(
       }
 
       case "knowledge.search": {
-        const { platform } = knowledgeSearchParamsSchema.parse(req.params);
+        const { query, platform } = knowledgeSearchParamsSchema.parse(req.params);
         const hits: KbSearchHit[] = [];
         const platformsToSearch: readonly PlatformId[] = platform ? [platform] : PLATFORM_IDS;
 
@@ -225,10 +249,31 @@ export async function dispatchToolCall<T = unknown>(
           });
         }
 
+        // Tokenize query into Chinese characters/words and alphanumeric terms
+        const tokens = query
+          .toLowerCase()
+          .trim()
+          .split(/[\s,，、;；|/]+/)
+          .filter(Boolean);
+
+        if (tokens.length === 0) {
+          return {
+            tool: req.tool,
+            ok: true,
+            data: ([] as unknown) as T,
+            elapsedMs: Date.now() - started,
+          };
+        }
+
+        const filteredHits = hits.filter((card) => {
+          const text = `${card.title} ${card.detail}`.toLowerCase();
+          return tokens.some((token) => text.includes(token));
+        });
+
         return {
           tool: req.tool,
           ok: true,
-          data: hits as T,
+          data: filteredHits as T,
           elapsedMs: Date.now() - started,
         };
       }
@@ -240,6 +285,50 @@ export async function dispatchToolCall<T = unknown>(
           tool: req.tool,
           ok: true,
           data: result as T,
+          elapsedMs: Date.now() - started,
+        };
+      }
+
+      case "sources.list": {
+        const { sources } = sourcesListParamsSchema.parse(req.params);
+        const catalog = sources.map((source) => ({
+          id: source.id,
+          title: source.title,
+          ...(source.kind !== undefined ? { kind: source.kind } : {}),
+        }));
+        return {
+          tool: req.tool,
+          ok: true,
+          data: catalog as T,
+          elapsedMs: Date.now() - started,
+        };
+      }
+
+      case "sources.read": {
+        const { sources, sourceIds } = sourcesReadParamsSchema.parse(req.params);
+        const byId = new Map(sources.map((source) => [source.id, source]));
+        const missing = sourceIds.filter((id) => !byId.has(id));
+        if (missing.length > 0) {
+          return {
+            tool: req.tool,
+            ok: false,
+            error: `未知资料 ID: ${missing.join(", ")}`,
+            elapsedMs: Date.now() - started,
+          };
+        }
+        const entries = sourceIds.map((id) => {
+          const source = byId.get(id)!;
+          return {
+            id: source.id,
+            title: source.title,
+            ...(source.kind !== undefined ? { kind: source.kind } : {}),
+            body: source.body ?? "",
+          };
+        });
+        return {
+          tool: req.tool,
+          ok: true,
+          data: entries as T,
           elapsedMs: Date.now() - started,
         };
       }

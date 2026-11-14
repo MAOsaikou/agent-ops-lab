@@ -16,8 +16,8 @@ describe("Task 2: Whitelisted Read-Only Tool Contracts & Dispatcher", () => {
   const sampleProduct: ProductInput = SAMPLES[0]!.input;
   const testPriceCents = 3990;
 
-  test("defines exactly 7 whitelisted tool names", () => {
-    expect(TOOL_NAMES).toHaveLength(7);
+  test("defines exactly 9 whitelisted tool names", () => {
+    expect(TOOL_NAMES).toHaveLength(9);
     expect(TOOL_NAMES).toEqual([
       "pricing.unit-cost",
       "pricing.break-even",
@@ -26,8 +26,10 @@ describe("Task 2: Whitelisted Read-Only Tool Contracts & Dispatcher", () => {
       "pricing.verify",
       "knowledge.search",
       "product.parse",
+      "sources.list",
+      "sources.read",
     ]);
-    expect(TOOL_WHITELIST).toHaveLength(7);
+    expect(TOOL_WHITELIST).toHaveLength(9);
     for (const tool of TOOL_WHITELIST) {
       expect(TOOL_NAMES).toContain(tool.name);
       expect(tool.title.length).toBeGreaterThan(0);
@@ -142,6 +144,83 @@ describe("Task 2: Whitelisted Read-Only Tool Contracts & Dispatcher", () => {
     expect(toolResult.data![0]!.title).toContain("淘宝");
   });
 
+  test("knowledge.search filters relevant Chinese query and excludes unrelated topics", async () => {
+    const toolResult = await dispatchToolCall<readonly { id: string; title: string; detail: string }[]>({
+      tool: "knowledge.search",
+      params: { query: "佣金", platform: "taobao" },
+      callerRole: "planner",
+      runId: "test-run-ks-1",
+    });
+
+    expect(toolResult.ok).toBe(true);
+    expect(Array.isArray(toolResult.data)).toBe(true);
+    expect(toolResult.data!.length).toBeGreaterThan(0);
+    for (const card of toolResult.data!) {
+      expect(card.title).toContain("淘宝");
+      expect(card.title + card.detail).toMatch(/佣金|扣点|费率|费用/);
+    }
+  });
+
+  test("knowledge.search returns empty hits for unrelated query", async () => {
+    const toolResult = await dispatchToolCall<readonly { id: string; title: string; detail: string }[]>({
+      tool: "knowledge.search",
+      params: { query: "量子力学", platform: "taobao" },
+      callerRole: "planner",
+      runId: "test-run-ks-2",
+    });
+
+    expect(toolResult.ok).toBe(true);
+    expect(toolResult.data).toEqual([]);
+  });
+
+  test("knowledge.search returns empty hits for empty-but-valid query", async () => {
+    const toolResult = await dispatchToolCall<readonly { id: string; title: string; detail: string }[]>({
+      tool: "knowledge.search",
+      params: { query: "   ", platform: "taobao" },
+      callerRole: "planner",
+      runId: "test-run-ks-3",
+    });
+
+    expect(toolResult.ok).toBe(true);
+    expect(toolResult.data).toEqual([]);
+  });
+
+  test("knowledge.search matches settlement Chinese query", async () => {
+    const toolResult = await dispatchToolCall<readonly { id: string; title: string; detail: string }[]>({
+      tool: "knowledge.search",
+      params: { query: "账期", platform: "taobao" },
+      callerRole: "planner",
+      runId: "test-run-ks-4",
+    });
+
+    expect(toolResult.ok).toBe(true);
+    expect(Array.isArray(toolResult.data)).toBe(true);
+    expect(toolResult.data!.length).toBeGreaterThan(0);
+    for (const card of toolResult.data!) {
+      expect(card.title).toContain("淘宝");
+      expect(card.title + card.detail).toMatch(/结算|账期|周期/);
+    }
+  });
+
+  test("knowledge.search differentiates relevant query and unrelated query result sets", async () => {
+    const relevantResult = await dispatchToolCall<readonly { id: string; title: string; detail: string }[]>({
+      tool: "knowledge.search",
+      params: { query: "佣金", platform: "taobao" },
+      callerRole: "planner",
+      runId: "test-run-ks-5a",
+    });
+    const unrelatedResult = await dispatchToolCall<readonly { id: string; title: string; detail: string }[]>({
+      tool: "knowledge.search",
+      params: { query: "量子力学", platform: "taobao" },
+      callerRole: "planner",
+      runId: "test-run-ks-5b",
+    });
+
+    expect(relevantResult.ok).toBe(true);
+    expect(unrelatedResult.ok).toBe(true);
+    expect(relevantResult.data).not.toEqual(unrelatedResult.data);
+  });
+
   test("product.parse extracts structured facts from text input", async () => {
     const toolResult = await dispatchToolCall<IntakeResult>({
       tool: "product.parse",
@@ -152,6 +231,42 @@ describe("Task 2: Whitelisted Read-Only Tool Contracts & Dispatcher", () => {
 
     expect(toolResult.ok).toBe(true);
     expect(toolResult.data?.patch.name).toBe("便携保温杯");
+  });
+
+  test("sources.list returns catalog metadata without bodies and sources.read reads up to 2 valid ids", async () => {
+    const sources = [
+      { id: "doc-1", title: "对账单", kind: "procurement", body: "SECRET_BODY_1" },
+      { id: "doc-2", title: "账期函", kind: "procurement", body: "SECRET_BODY_2" },
+    ];
+    const listResult = await dispatchToolCall<readonly { id: string; title: string; kind?: string; body?: string }[]>({
+      tool: "sources.list",
+      params: { sources },
+      callerRole: "generalist",
+      runId: "test-run-sources-list",
+    });
+    expect(listResult.ok).toBe(true);
+    expect(listResult.data).toEqual([
+      { id: "doc-1", title: "对账单", kind: "procurement" },
+      { id: "doc-2", title: "账期函", kind: "procurement" },
+    ]);
+
+    const readResult = await dispatchToolCall<readonly { id: string; title: string; kind?: string; body: string }[]>({
+      tool: "sources.read",
+      params: { sources, sourceIds: ["doc-1", "doc-2"] },
+      callerRole: "generalist",
+      runId: "test-run-sources-read",
+    });
+    expect(readResult.ok).toBe(true);
+    expect(readResult.data?.map((item) => item.body)).toEqual(["SECRET_BODY_1", "SECRET_BODY_2"]);
+
+    const invalidRead = await dispatchToolCall({
+      tool: "sources.read",
+      params: { sources, sourceIds: ["missing-doc"] },
+      callerRole: "generalist",
+      runId: "test-run-sources-read-missing",
+    });
+    expect(invalidRead.ok).toBe(false);
+    expect(invalidRead.error).toContain("missing-doc");
   });
 
   test("rejects unauthorized tool names safely", async () => {

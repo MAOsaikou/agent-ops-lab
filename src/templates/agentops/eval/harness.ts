@@ -1,4 +1,4 @@
-import { runAgentWorkflow } from "../runner.js";
+import { defaultProductOrchestrator } from "../orchestrator.js";
 import { BENCHMARK_CASES, BENCHMARK_DATASET_HASH } from "./dataset.js";
 import type { BenchmarkCase, CaseExpectations, EvaluationMetrics } from "./types.js";
 import type { LiveLlm } from "../llm.js";
@@ -46,11 +46,14 @@ export type EvalOptions = {
   readonly live?: LiveLlm | null;
 };
 
+export type CaseOutcome = "approve" | "reject" | "clarify" | "incomplete";
+export type LegacyCaseOutcome = "approve" | "reject" | "clarify";
+
 export type CaseDetail = {
   readonly caseId: string;
   readonly topology: TopologyName;
   readonly pass: boolean;
-  readonly outcome: "approve" | "reject" | "clarify";
+  readonly outcome: CaseOutcome;
   readonly elapsedMs: number;
   readonly tokens: number;
   readonly unmatched: readonly string[];
@@ -67,7 +70,7 @@ export type EvalSuiteResult = {
 };
 
 export type CaseObservation = {
-  readonly outcome: "approve" | "reject" | "clarify";
+  readonly outcome: CaseOutcome;
   readonly detectedRiskIds: readonly string[];
   readonly claimTexts: readonly string[];
   readonly chosenId: string | null;
@@ -104,7 +107,9 @@ export function scoreCase(expectations: CaseExpectations, observed: CaseObservat
   const refusalEligible =
     expectations.expectedOutcome === "clarify" || expectations.expectedOutcome === "reject";
   let refusalCorrect = false;
-  if (refusalEligible) {
+  if (observed.outcome === "incomplete") {
+    unmatched.push(`运行未完成（incomplete / stopped），预期 ${expectations.expectedOutcome}`);
+  } else if (refusalEligible) {
     refusalCorrect = observed.outcome === expectations.expectedOutcome;
     if (!refusalCorrect) {
       unmatched.push(`预期 ${expectations.expectedOutcome}，实际判定为 ${observed.outcome}`);
@@ -134,15 +139,35 @@ export function scoreCase(expectations: CaseExpectations, observed: CaseObservat
 }
 
 /**
- * Derive the observed outcome from the run artifacts only.
- * The case expectations are intentionally not available here so the harness cannot
- * back-fill a verdict from what the dataset expected.
+ * Legacy outcome derivation (kept for baseline comparison against prior logs).
+ * Note: stopped runs with product/chosenId were treated as "approve" under the legacy rule.
  */
-function extractOutcome(run: AgentRun): CaseDetail["outcome"] {
+export function extractOutcomeLegacy(run: AgentRun): LegacyCaseOutcome {
   if (run.status === "rejected" || run.gateDecision === "reject") {
     return "reject";
   }
   if (run.artifacts.product === null && run.artifacts.chosenId === null) {
+    return "clarify";
+  }
+  return "approve";
+}
+
+/**
+ * Derive the observed outcome from the run artifacts only.
+ * The case expectations are intentionally not available here so the harness cannot
+ * back-fill a verdict from what the dataset expected.
+ */
+export function extractOutcome(run: AgentRun): CaseDetail["outcome"] {
+  if (run.status === "rejected" || run.gateDecision === "reject") {
+    return "reject";
+  }
+  if (run.status === "stopped") {
+    return "incomplete";
+  }
+  if (run.artifacts.product === null && run.artifacts.chosenId === null) {
+    return "clarify";
+  }
+  if (run.artifacts.decisionAct?.action === "clarify") {
     return "clarify";
   }
   return "approve";
@@ -155,7 +180,7 @@ const CLARIFY_FIELD_BY_QUESTION_ID: Readonly<Record<string, string>> = {
 };
 
 function clarifiedFieldsFrom(run: AgentRun): readonly string[] {
-  const fields = new Set<string>();
+  const fields = new Set<string>(run.artifacts.clarifiedFields ?? []);
   for (const question of run.scheduler.facts?.questions ?? []) {
     const field = CLARIFY_FIELD_BY_QUESTION_ID[question.id];
     if (field !== undefined) fields.add(field);
@@ -255,21 +280,23 @@ export async function runEvaluationSuite(options: EvalOptions): Promise<EvalSuit
 
     for (const benchmarkCase of cases) {
       const started = Date.now();
-      const run = await runAgentWorkflow(
+      const run = await defaultProductOrchestrator.start(
         {
           id: `eval-${topology}-${benchmarkCase.id}`,
           taskText: benchmarkCase.taskText,
           autoApprove: true,
           createdAt: "2026-01-01T00:00:00.000Z",
         },
-        live,
-        undefined,
         {
-          collaboration: config.collaboration,
-          modelReview: config.modelReview,
-          strictEvidence: true,
-          singleAgent: config.singleAgent,
-          economicLoop: config.economicLoop,
+          live,
+          options: {
+            collaboration: config.collaboration,
+            modelReview: config.modelReview,
+            strictEvidence: true,
+            singleAgent: config.singleAgent,
+            economicLoop: config.economicLoop,
+            budgetCeiling: BUDGET_CEILING,
+          },
         },
       );
       const elapsedMs = Date.now() - started;

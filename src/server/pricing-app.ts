@@ -15,7 +15,12 @@ import type { PlanStore } from "./plans.js";
 import { analyzeProductInput } from "../templates/intake/agent.js";
 import { prepareIntake } from "../templates/agentops/preflight.js";
 import { AGENTS, DEFAULT_WORKFLOW, TOOL_CATALOG, WORKFLOW_TEMPLATES } from "../templates/agentops/catalog.js";
-import { DecisionConflictError, isSameDecision, resumeAgentWorkflow, runAgentWorkflow } from "../templates/agentops/runner.js";
+import {
+  createProductOrchestrator,
+  DecisionConflictError,
+  ProductRunCorruptError,
+  ProductRunNotFoundError,
+} from "../templates/agentops/orchestrator.js";
 import { BENCHMARK_CASES } from "../templates/agentops/eval/dataset.js";
 import { ALL_TOPOLOGIES, runEvaluationSuite, topologyConfig } from "../templates/agentops/eval/harness.js";
 import type { AgentRun, RunEvent } from "../templates/agentops/types.js";
@@ -57,12 +62,30 @@ const intakeSchema = z.strictObject({
   links: z.array(z.string().max(2_048)).max(10).optional(),
 });
 
+// Security note: mcp protocol hooks remain server-trusted configuration only
+// and are never exposed via HTTP schema to prevent arbitrary process execution.
+const budgetCeilingSchema = z.strictObject({
+  maxTokens: z.number().finite().min(0).max(1_000_000),
+  maxToolCalls: z.number().finite().min(0).max(10_000),
+  timeoutMs: z.number().finite().min(0).max(300_000),
+});
+
+const retrievalSchema = z.strictObject({
+  enabled: z.boolean(),
+  query: z.string().min(1).max(20_000),
+  platform: z.enum(PLATFORM_IDS).optional(),
+  timeoutMs: z.number().finite().min(0).max(60_000).optional(),
+});
+
 const runRequestSchema = z.strictObject({
   task: z.string().min(8).max(20_000),
   autoApprove: z.boolean().optional(),
   id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/).optional(),
   createdAt: z.string().min(1).max(64).optional(),
   collaboration: z.boolean().optional(),
+  budgetCeiling: budgetCeilingSchema.optional(),
+  modelReview: z.boolean().optional(),
+  retrieval: retrievalSchema.optional(),
 });
 
 const decisionSchema = z.strictObject({
@@ -109,6 +132,7 @@ export function createPricingApp(options: PricingAppOptions): Hono {
   const app = new Hono();
   const now = options.now ?? (() => new Date());
   const agentRuns = options.agentRuns ?? memoryAgentRunStore();
+  const orchestrator = createProductOrchestrator({ store: agentRuns });
   const llmSettings = options.llmSettings ?? openLlmSettingsStore(null, process.env);
   const inFlightDecisions = new Set<string>();
 
@@ -153,7 +177,7 @@ export function createPricingApp(options: PricingAppOptions): Hono {
     c.json({ agents: AGENTS, tools: TOOL_CATALOG, workflow: DEFAULT_WORKFLOW, templates: WORKFLOW_TEMPLATES }),
   );
 
-  app.get("/api/agentops/runs", (c) => c.json({ runs: agentRuns.list() }));
+  app.get("/api/agentops/runs", (c) => c.json({ runs: orchestrator.list() }));
 
   app.get("/api/agentops/llm", (c) => c.json(llmSettings.view()));
 
@@ -168,13 +192,20 @@ export function createPricingApp(options: PricingAppOptions): Hono {
 
   app.post("/api/agentops/llm/test", async (c) => c.json(await llmSettings.test()));
 
-  const streamAgentRun = (input: {
-    readonly id: string;
-    readonly taskText: string;
-    readonly autoApprove: boolean;
-    readonly createdAt: string;
-    readonly collaboration?: boolean | undefined;
-  }): Response => {
+  const streamAgentRun = (
+    input: {
+      readonly id: string;
+      readonly taskText: string;
+      readonly autoApprove: boolean;
+      readonly createdAt: string;
+    },
+    runOptions: {
+      readonly collaboration?: boolean | undefined;
+      readonly budgetCeiling?: z.infer<typeof budgetCeilingSchema> | undefined;
+      readonly modelReview?: boolean | undefined;
+      readonly retrieval?: z.infer<typeof retrievalSchema> | undefined;
+    },
+  ): Response => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -183,10 +214,9 @@ export function createPricingApp(options: PricingAppOptions): Hono {
           // (model review when configured, otherwise copy), so the UI can show them while a
           // slow provider is still in flight. The gate stays locked until the run is saved.
           let snapshotSent = false;
-          const run = await runAgentWorkflow(
-            input,
-            llmSettings.resolve(),
-            (event, snapshot) => {
+          const run = await orchestrator.start(input, {
+            live: llmSettings.resolve(),
+            onEvent: (event, snapshot) => {
               controller.enqueue(encoder.encode(formatAgentOpsEvent(event)));
               const beforeModel = event.type === "review.started"
                 || (event.nodeId === "copy" && event.type === "node.output");
@@ -195,9 +225,14 @@ export function createPricingApp(options: PricingAppOptions): Hono {
                 controller.enqueue(encoder.encode(formatAgentOpsSnapshot(snapshot)));
               }
             },
-            { collaboration: input.collaboration, strictEvidence: true },
-          );
-          agentRuns.save(run);
+            options: {
+              collaboration: runOptions.collaboration,
+              strictEvidence: true,
+              budgetCeiling: runOptions.budgetCeiling,
+              modelReview: runOptions.modelReview,
+              retrieval: runOptions.retrieval,
+            },
+          });
           controller.enqueue(encoder.encode(formatAgentOpsDone(run)));
         } catch (error) {
           const detail = error instanceof Error ? error.message : "Agent run failed";
@@ -218,13 +253,20 @@ export function createPricingApp(options: PricingAppOptions): Hono {
     if (!parsed.success) return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
     const id = parsed.data.id ?? newRunId();
     const createdAt = parsed.data.createdAt ?? now().toISOString();
-    return streamAgentRun({
-      id,
-      taskText: parsed.data.task,
-      autoApprove: parsed.data.autoApprove ?? true,
-      createdAt,
-      collaboration: parsed.data.collaboration,
-    });
+    return streamAgentRun(
+      {
+        id,
+        taskText: parsed.data.task,
+        autoApprove: parsed.data.autoApprove ?? true,
+        createdAt,
+      },
+      {
+        collaboration: parsed.data.collaboration,
+        budgetCeiling: parsed.data.budgetCeiling,
+        modelReview: parsed.data.modelReview,
+        retrieval: parsed.data.retrieval,
+      },
+    );
   });
 
   app.post("/api/agentops/runs", async (c) => {
@@ -238,17 +280,27 @@ export function createPricingApp(options: PricingAppOptions): Hono {
       taskText: parsed.data.task,
       autoApprove: parsed.data.autoApprove ?? true,
       createdAt,
+    };
+    const runOptions = {
       collaboration: parsed.data.collaboration,
+      budgetCeiling: parsed.data.budgetCeiling,
+      modelReview: parsed.data.modelReview,
+      retrieval: parsed.data.retrieval,
     };
     if (c.req.header("accept")?.includes("text/event-stream") === true) {
-      return streamAgentRun(input);
+      return streamAgentRun(input, runOptions);
     }
     try {
-      const run = await runAgentWorkflow(input, llmSettings.resolve(), undefined, {
-        collaboration: parsed.data.collaboration,
-        strictEvidence: true,
+      const run = await orchestrator.start(input, {
+        live: llmSettings.resolve(),
+        options: {
+          collaboration: parsed.data.collaboration,
+          strictEvidence: true,
+          budgetCeiling: parsed.data.budgetCeiling,
+          modelReview: parsed.data.modelReview,
+          retrieval: parsed.data.retrieval,
+        },
       });
-      agentRuns.save(run);
       return c.json(run, 201);
     } catch (error) {
       return c.json({ code: "run-failed", detail: error instanceof Error ? error.message : "Agent run failed" }, 422);
@@ -267,9 +319,12 @@ export function createPricingApp(options: PricingAppOptions): Hono {
         409,
       );
     }
-    const existing = agentRuns.load(id);
-    if (existing === undefined) {
+    const existing = orchestrator.inspect(id);
+    if (existing.kind === "missing") {
       return c.json({ code: "run-not-found", id }, 404);
+    }
+    if (existing.kind === "corrupt") {
+      return c.json({ code: "run-corrupt", id, detail: existing.reason }, 422);
     }
     inFlightDecisions.add(id);
     try {
@@ -278,32 +333,15 @@ export function createPricingApp(options: PricingAppOptions): Hono {
       if (!parsed.success) {
         return c.json({ code: "bad-request", detail: parsed.error.message }, 400);
       }
-      const current = agentRuns.load(id);
-      if (current === undefined) {
-        return c.json({ code: "run-not-found", id }, 404);
-      }
-      if (current.status !== "awaiting-approval") {
-        if ((current.status === "completed" || current.status === "rejected") && isSameDecision(current, parsed.data)) {
-          return c.json(current, 200);
-        }
-        const code = current.gateDecision !== null ? "decision-conflict" : "run-not-awaiting-decision";
-        return c.json(
-          {
-            code,
-            id,
-            status: current.status,
-            detail:
-              code === "decision-conflict"
-                ? "该运行已封存不同的人工决策，禁止覆盖"
-                : "该运行当前不在等待人工确认阶段",
-          },
-          409,
-        );
-      }
-      const updated = await resumeAgentWorkflow(current, parsed.data);
-      agentRuns.save(updated);
+      const updated = await orchestrator.resume(id, parsed.data);
       return c.json(updated, 200);
     } catch (error) {
+      if (error instanceof ProductRunNotFoundError) {
+        return c.json({ code: "run-not-found", id }, 404);
+      }
+      if (error instanceof ProductRunCorruptError) {
+        return c.json({ code: "run-corrupt", id, detail: error.message }, 422);
+      }
       if (error instanceof DecisionConflictError) {
         return c.json({ code: error.code, id, status: error.status, detail: error.message }, 409);
       }
@@ -314,15 +352,17 @@ export function createPricingApp(options: PricingAppOptions): Hono {
   });
 
   app.get("/api/agentops/runs/:id", (c) => {
-    const inspected = agentRuns.inspect(c.req.param("id"));
+    const inspected = orchestrator.inspect(c.req.param("id"));
     if (inspected.kind === "missing") return c.json({ code: "run-not-found", detail: "找不到这份评审卷宗" }, 404);
     if (inspected.kind === "corrupt") return c.json({ code: "run-corrupt", detail: inspected.reason }, 422);
     return c.json(inspected.run);
   });
 
   app.get("/api/agentops/runs/:id/events", (c) => {
-    const run = agentRuns.load(c.req.param("id"));
-    return run === undefined ? c.json({ code: "run-not-found" }, 404) : c.json({ events: run.events, fingerprint: run.fingerprint });
+    const inspected = orchestrator.inspect(c.req.param("id"));
+    return inspected.kind !== "ok"
+      ? c.json({ code: "run-not-found" }, 404)
+      : c.json({ events: inspected.run.events, fingerprint: inspected.run.fingerprint });
   });
 
 

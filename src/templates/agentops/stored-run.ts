@@ -25,7 +25,7 @@ import type {
  * fingerprint: legacy runs keep the exact bytes they were sealed with.
  */
 
-export const RUN_STATUSES: readonly RunStatus[] = ["running", "awaiting-approval", "completed", "rejected"];
+export const RUN_STATUSES: readonly RunStatus[] = ["running", "awaiting-approval", "completed", "rejected", "stopped"];
 
 export type StoredRunResult =
   | { readonly ok: true; readonly run: AgentRun }
@@ -289,6 +289,16 @@ function artifactsOf(raw: Rec): Artifacts {
     bullets: strings(raw.bullets),
     report: strings(raw.report),
     assumptions: strings(raw.assumptions),
+    ...(Array.isArray(raw.citations)
+      ? {
+          citations: recs(raw.citations).map((c) => ({
+            refId: str(c.refId),
+            title: str(c.title),
+            detail: str(c.detail),
+            source: (c.source === "custom" ? "custom" : "knowledge.search") as "knowledge.search" | "custom",
+          })),
+        }
+      : {}),
   };
 }
 
@@ -341,6 +351,16 @@ export function parseStoredRun(raw: unknown): StoredRunResult {
     : { id: "legacy", title: "旧版评审流程", intent: "", nodes: [] };
 
   const tokenUsage = tokenUsageOf(raw.tokenUsage);
+  const stopReason =
+    raw.stopReason === "budget.tool_calls" ||
+    raw.stopReason === "budget.tokens" ||
+    raw.stopReason === "budget.timeout" ||
+    raw.stopReason === "budget.completions"
+      ? raw.stopReason
+      : undefined;
+  const usageAccounting = isRec(raw.usageAccounting)
+    ? (raw.usageAccounting as AgentRun["usageAccounting"])
+    : undefined;
   const run: AgentRun = {
     id: raw.id,
     createdAt: str(raw.createdAt),
@@ -364,6 +384,14 @@ export function parseStoredRun(raw: unknown): StoredRunResult {
     calls,
     scheduler: schedulerOf(raw.scheduler, { loads, calls, failures }, raw),
     ...(tokenUsage === undefined ? {} : { tokenUsage }),
+    ...(stopReason === undefined ? {} : { stopReason }),
+    ...(usageAccounting === undefined ? {} : { usageAccounting }),
+    ...(Array.isArray(raw.protocolTraces)
+      ? { protocolTraces: raw.protocolTraces as AgentRun["protocolTraces"] }
+      : {}),
+    ...(Array.isArray(raw.protocolErrors)
+      ? { protocolErrors: raw.protocolErrors as AgentRun["protocolErrors"] }
+      : {}),
   };
   return { ok: true, run };
 }

@@ -97,6 +97,11 @@ const RUN_STATUS_META: Record<
     tone: "seal",
     summary: "你已驳回，这件不上架",
   },
+  stopped: {
+    label: "预算已用尽，已停止",
+    tone: "seal",
+    summary: "触发预算或超时上限，已安全停止",
+  },
 };
 
 const STRATEGY_LABELS: Readonly<Record<string, string>> = {
@@ -1382,7 +1387,9 @@ export function AgentOpsConsole(): React.JSX.Element {
                                     ? "已拍板"
                                     : run.status === "rejected"
                                       ? "已驳回"
-                                      : "请你拍板"}
+                                      : run.status === "stopped"
+                                        ? "预算已用尽，已停止"
+                                        : "请你拍板"}
                       </span>
                       {run === null ? (
                         <Pill tone="plain">请先运行评审</Pill>
@@ -1400,6 +1407,8 @@ export function AgentOpsConsole(): React.JSX.Element {
                         </Pill>
                       ) : run.status === "rejected" ? (
                         <Pill tone="seal">掌柜已驳回方案</Pill>
+                      ) : run.status === "stopped" ? (
+                        <Pill tone="seal">预算已用尽，已停止</Pill>
                       ) : (
                         <Pill tone="ochre">核算进行中</Pill>
                       )}
@@ -1447,7 +1456,9 @@ export function AgentOpsConsole(): React.JSX.Element {
                                   ? "已拍板封存"
                                   : run.status === "rejected"
                                     ? "已驳回封存"
-                                    : (
+                                    : run.status === "stopped"
+                                      ? "预算已用尽，已停止"
+                                      : (
                                 <>
                                   拍板通过
                                   {activeCandidate ? <span className="hidden sm:inline">（{activeCandidate.label}）</span> : null}

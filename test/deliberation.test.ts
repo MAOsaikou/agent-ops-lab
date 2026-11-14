@@ -98,7 +98,7 @@ describe("真实模型多方评审的有界编排", () => {
     expect(updates[0]!.artifact.nodes.every((n) => n.status === "running")).toBe(true);
     expect(JSON.stringify({ product: args.product, candidates: args.candidates, collaboration: args.collaboration })).toBe(unchanged);
     for (const request of mock.requests) {
-      expect(request.maxTokens).toBe(4096);
+      expect(request.maxTokens).toBe(640);
       expect(request.responseFormat).toBe("json_object");
       expect(request.reasoningEffort).toBe("low");
       expect(request.timeoutMs).toBeGreaterThan(0);

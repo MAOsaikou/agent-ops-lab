@@ -88,7 +88,8 @@ pnpm e2e                                   # 自动启动隔离服务；先关�
 ```
 POST /api/agentops/intake             评审前检查资料并追问缺项；不创建运行
 GET  /api/agentops/catalog            Agent 团队、工具注册表、默认工作流
-POST /api/agentops/runs               传 {task, autoApprove?}，执行一次完整编排
+POST /api/agentops/runs               传 {task, autoApprove?, collaboration?, budgetCeiling?, modelReview?, retrieval?}，执行一次完整编排（支持 accept: text/event-stream 流式响应）
+POST /api/agentops/runs/stream        同上，专用于 SSE 事件流返回
 GET  /api/agentops/runs               运行列表
 GET  /api/agentops/runs/:id           单次运行：调度、事件、验证、循环、产物、指纹
 GET  /api/agentops/runs/:id/events    只取事件链与指纹
@@ -98,8 +99,22 @@ POST /api/plans                       传一份商品输入，返回三套方案
 GET  /api/plans/:id/export.csv        导出价格表（带 BOM，Excel 直接开）
 ```
 
+### 运行选项与安全排除说明
+
+`POST /api/agentops/runs` 与 `POST /api/agentops/runs/stream` 支持以下可选字段（采用严格校验，未知字段直接返回 400 `bad-request`）：
+- `collaboration`: 可选布尔值，是否启用多 Agent 协作工作流。
+- `budgetCeiling`: 包含三项有界非负数值的预算上限对象 `{ maxTokens: number, maxToolCalls: number, timeoutMs: number }`（上限：`maxTokens` ≤ 1,000,000, `maxToolCalls` ≤ 10,000, `timeoutMs` ≤ 300,000）。超限或部分缺项将被拒绝。
+- `modelReview`: 可选布尔值，是否在有模型配置时启用多模型审查会审。
+- `retrieval`: 检索配置对象 `{ enabled: boolean, query: string, platform?: PlatformId, timeoutMs?: number }`。开启时仅允许调用受信任的进程内内置知识库（`knowledge.search`），`timeoutMs` ≤ 60,000。
+
+**安全排除原则**：
+- 禁止通过客户端请求指定或传入 MCP 协议命令（`protocols.mcp.command`）、Shell 指令或任何可执行程序；MCP 协议挂钩属于服务端受信配置。
+- 禁止传入自定义 retriever 函数、URL、`baseUrl`、`apiKey`、`liveEndpoint` 或任何任意文件/内网地址（如 `file://`、`http://127.0.0.1/`）。
+- 接口严格阻断对运行时 LLM 连接参数和设置存储的注入篡改。
+
 ## 边界（请务必知道）
 
+- 本项目第三方依赖许可证与归属通告见 [NOTICE.md](./NOTICE.md)（仅供清单记录与归属通告，非正式法律意见）。
 - 平台费率是常见参考值，各平台按类目浮动，请填你后台的实际扣点。
 - 需求模型只用任务里给的市场日单量和价格弹性，不预测趋势、不保证销量；没给的数字会在报告里列为「演示假设」。
 - 短链和动态商品页不会被假装解析；缺失字段进入待确认，不写成已抓取事实。
