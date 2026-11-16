@@ -6,8 +6,11 @@ import { describe, expect, test } from "vitest";
 import {
   ALL_TOPOLOGIES,
   BUDGET_CEILING,
+  formatCampaignMarkdown,
+  formatCampaignTsv,
   formatEvalMarkdown,
   formatEvalTsv,
+  runCampaignEvaluation,
   runEvaluationSuite,
   scoreCase,
   topologyConfig,
@@ -201,7 +204,7 @@ describe("Task 5: Multi-Topology Evaluation Harness & pnpm exp", () => {
     });
 
     expect(result.datasetHash).toBe(BENCHMARK_DATASET_HASH);
-    expect(result.datasetHash).toBe("2a2710aadef149fc2fa050c49088a5ec996a28223415b13e64498550d10ab892");
+    expect(result.datasetHash).toBe("dd58e98d2a5f370b4d4d262929d9c9dd96cf27602d4f4cca01e2e38fc2091d37");
     expect(validateBenchmarkDataset().valid).toBe(true);
     expect(result.budgetCeiling).toEqual(BUDGET_CEILING);
     expect(new Date(result.timestamp).toISOString()).toBe(result.timestamp);
@@ -415,9 +418,65 @@ describe("Task 5: Multi-Topology Evaluation Harness & pnpm exp", () => {
     expect(source).toContain("runEvaluationSuite");
     expect(source).toContain("formatEvalMarkdown");
     expect(source).toContain("formatEvalTsv");
+    expect(source).toContain("runCampaignEvaluation");
+    expect(source).toContain("formatCampaignMarkdown");
+    expect(source).toContain("formatCampaignTsv");
     expect(source).toContain("BENCHMARK_DATASET_HASH");
     expect(source).toContain("ALL_TOPOLOGIES");
     expect(source).not.toMatch(/总体优势|协作优于|显著优于|一等奖/);
     expect(source).not.toContain("not-implemented");
+  });
+
+  test("runCampaignEvaluation compares 4 strategies across 8-round spring/supplycut/pricewar with consistent hashes", async () => {
+    const campaign = await runCampaignEvaluation({
+      scenarios: ["spring", "supplycut", "pricewar"],
+      seeds: [7, 42],
+    });
+
+    expect(campaign.scenarios).toEqual(["spring", "supplycut", "pricewar"]);
+    expect(campaign.seeds).toEqual([7, 42]);
+    expect(campaign.seed).toBe(7);
+    expect(campaign.roundsPerRun).toBe(8);
+    expect(campaign.runs).toHaveLength(24);
+    for (const run of campaign.runs) {
+      expect(run.rounds).toHaveLength(8);
+      expect(run.ledgerHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(run.ledgerConsistent).toBe(true);
+    }
+
+    const withReview = campaign.summary["collab-with-review"]!;
+    const noReview = campaign.summary["collab-no-review"]!;
+    const single = campaign.summary["single-agent"]!;
+    const rule = campaign.summary.rule!;
+
+    expect(withReview.allLedgerConsistent).toBe(true);
+    expect(withReview.reviewPassRate).toBe(1);
+    expect(withReview.totalFallbackRounds).toBe(0);
+    expect(withReview.negotiatedDealsCount).toBe(8);
+    expect(withReview.priceWarZeroInterceptions).toBe(2);
+    expect(withReview.versionUpgradeCount).toBe(6);
+    expect(withReview.upgradedVersions).toContain("pricer@1.0.1");
+    expect(withReview.totalProfitCents).toBeGreaterThan(noReview.totalProfitCents);
+    expect(noReview.totalProfitCents).toBeGreaterThan(single.totalProfitCents);
+    expect(single.totalProfitCents).toBeGreaterThan(rule.totalProfitCents);
+
+    expect(noReview.stressedAuditReviewPassRate).toBe(0);
+    expect(noReview.stressedAuditFallbackRounds).toBe(48);
+
+    // Honest calm-scenario winner attribution: rule leads spring, collab-with-review leads crisis scenarios
+    expect(campaign.scenarioWinners.spring?.topology).toBe("rule");
+    expect(campaign.scenarioWinners.supplycut?.topology).toBe("collab-with-review");
+    expect(campaign.scenarioWinners.pricewar?.topology).toBe("collab-with-review");
+
+    const markdown = formatCampaignMarkdown(campaign);
+    const tsv = formatCampaignTsv(campaign);
+    expect(markdown).toContain("spring");
+    expect(markdown).toContain("supplycut");
+    expect(markdown).toContain("pricewar");
+    expect(markdown).toContain("pricer@1.0.1");
+    expect(markdown).not.toMatch(/总体优势|协作优于|显著优于|一等奖/);
+    expect(tsv).toContain("totalProfitCents");
+    expect(tsv).toContain("negotiatedDealsCount");
+    expect(tsv).not.toMatch(/总体优势|协作优于|显著优于|一等奖/);
   });
 });

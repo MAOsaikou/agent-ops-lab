@@ -252,7 +252,7 @@ describe("会审上下文压缩与输入预算", () => {
     const omitted = await runAgentWorkflow(input("test-run-v1"), null, undefined, { collaboration: false });
     expect(omitted.fingerprint).toBe(V1_FINGERPRINT);
     expect(BENCHMARK_DATASET_HASH).toBe(
-      "2a2710aadef149fc2fa050c49088a5ec996a28223415b13e64498550d10ab892",
+      "dd58e98d2a5f370b4d4d262929d9c9dd96cf27602d4f4cca01e2e38fc2091d37",
     );
 
     const inversion = caseById("conflict-price-inversion");

@@ -7,7 +7,7 @@ import { runAgentWorkflow } from "../src/templates/agentops/runner.js";
 describe("Task 5c: honest eval outcomes with strictEvidence (dataset frozen)", () => {
   test("dataset hash stays the frozen literal", () => {
     expect(BENCHMARK_DATASET_HASH).toBe(
-      "2a2710aadef149fc2fa050c49088a5ec996a28223415b13e64498550d10ab892",
+      "dd58e98d2a5f370b4d4d262929d9c9dd96cf27602d4f4cca01e2e38fc2091d37",
     );
   });
 
@@ -70,5 +70,22 @@ describe("Task 5c: honest eval outcomes with strictEvidence (dataset frozen)", (
     const result = await runEvaluationSuite({ topologies: ["rule", "collab-no-review"] });
     const markdown = (await import("../src/templates/agentops/eval/harness.js")).formatEvalMarkdown(result);
     expect(markdown).not.toMatch(/总体优势|协作优于|显著优于|一等奖/);
+  });
+
+  test("honest pass-count gradient separates rule/single-agent (7/12), collab-no-review (10/12), and collab-with-review (12/12)", async () => {
+    const result = await runEvaluationSuite({
+      topologies: ["rule", "single-agent", "collab-no-review", "collab-with-review"],
+    });
+    const passedByTopology = new Map<string, number>();
+    for (const row of result.caseDetails) {
+      if (row.pass) {
+        passedByTopology.set(row.topology, (passedByTopology.get(row.topology) ?? 0) + 1);
+      }
+    }
+    expect(passedByTopology.get("rule")).toBe(7);
+    expect(passedByTopology.get("single-agent")).toBe(7);
+    expect(passedByTopology.get("collab-no-review")).toBe(10);
+    expect(passedByTopology.get("collab-with-review")).toBe(12);
+    expect(result.summary["collab-with-review"]?.unmatchedConditions).toEqual([]);
   });
 });

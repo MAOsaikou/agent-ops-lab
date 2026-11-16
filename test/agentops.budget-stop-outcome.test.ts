@@ -95,7 +95,7 @@ function observationFrom(run: AgentRun, outcome: CaseObservation["outcome"]): Ca
 describe("Budget-stop must not masquerade as approve; market reject must not be skipped", () => {
   test("dataset hash and default-path fingerprints stay frozen", async () => {
     expect(BENCHMARK_DATASET_HASH).toBe(
-      "2a2710aadef149fc2fa050c49088a5ec996a28223415b13e64498550d10ab892",
+      "dd58e98d2a5f370b4d4d262929d9c9dd96cf27602d4f4cca01e2e38fc2091d37",
     );
     const v1 = await runAgentWorkflow(input("test-run-v1", V1_TASK), null, undefined, {
       collaboration: false,

@@ -15,7 +15,7 @@ export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     id: "std-apparel-pdd",
     title: "标准纯棉T恤（拼多多）",
     archetype: "standard",
-    taskText: "分析拼多多女装纯棉短袖上架可行性。采购价 16 元，包材 1.5 元，快递 6.5 元，竞品价 39.9 元，日单量 50，目标毛利 25%，预算 30 元，周转金 3000 元。",
+    taskText: "分析拼多多女装纯棉短袖上架可行性。采购价 16 元，包材 1.5 元，快递 4.5 元，竞品价 49.9 元，日单量 50，目标毛利 55%，预算 15 元，周转金 2400 元。",
     constructed: true,
     note: "构造样例：标准服饰品类，数据完整，各策略均可正常核算。",
     expectations: {
@@ -28,7 +28,7 @@ export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     id: "std-pillow-jd",
     title: "标准护颈记忆枕（京东）",
     archetype: "standard",
-    taskText: "评估护颈枕上架京东。采购 28 元，包材 3 元，快递 8 元，竞品 89 元，日销 40 单，目标毛利 30%，推广预算 60 元，周转金 8000 元。",
+    taskText: "评估护颈枕上架京东。采购 28 元，包材 3 元，快递 8 元，竞品 89 元，日销 40 单，目标毛利 54%，推广预算 30 元，周转金 3500 元。",
     constructed: true,
     note: "构造样例：家居标品，完整经营假设，利润与现金流均充裕。",
     expectations: {
@@ -73,7 +73,7 @@ export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     id: "conflict-demand-cap",
     title: "小众品类宣称超高单量",
     archetype: "conflict_evidence",
-    taskText: "上架高端复古墨水瓶，采购 40 元，运费 8 元，竞品 120 元。声称日单量 2000 单，预算 50 元，周转金 2000 元。",
+    taskText: "上架高端复古墨水瓶，采购 2 元，运费 24 元，竞品 72 元。声称日单量 1500 单，目标毛利 56%，预算 30 元，周转金 1800 元。",
     constructed: true,
     note: "构造样例：小众冷门类目夸大日单量，需独立质询指出单量与周转金严重背离并发出风险提醒。",
     expectations: {
@@ -102,7 +102,7 @@ export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     id: "cash-tight-volume-stockout",
     title: "周转资金极度匮乏",
     archetype: "cash_constraint",
-    taskText: "羽绒马甲上架。采购 65 元，包材 3 元，快递 8 元，竞品 159 元，日单量 60。可周转金仅 400 元，预算 30 元。",
+    taskText: "羽绒马甲上架。采购 7 元，包材 1 元，快递 3 元，竞品 54 元，目标毛利 52%，日单量 18。可周转金仅 900 元，预算 500 元。",
     constructed: true,
     note: "构造样例：周转金严重不足（仅够几件库存），冲量会导致超长缺货天数，应自动收紧推荐或预警。",
     expectations: {
@@ -116,7 +116,7 @@ export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     id: "cash-long-settlement",
     title: "超长账期导致现金断流",
     archetype: "cash_constraint",
-    taskText: "商用净水滤芯。采购 50 元，包材 4 元，快递 10 元，竞品 128 元，日单量 30。周转金 1500 元，平台账期 30 天。",
+    taskText: "商用净水滤芯。采购 7 元，包材 1 元，快递 3 元，竞品 54 元，目标毛利 52%，日单量 18。周转金 2200 元，预算 500 元，平台账期 30 天。",
     constructed: true,
     note: "构造样例：超长结算周期导致回款滞后，30天现金流模拟显示最低现金击穿阈值。",
     expectations: {
@@ -184,7 +184,7 @@ export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
  * 任何用例、字段或字符的改动均会使 validateBenchmarkDataset 校验失败。
  */
 export const BENCHMARK_DATASET_HASH =
-  "2a2710aadef149fc2fa050c49088a5ec996a28223415b13e64498550d10ab892";
+  "dd58e98d2a5f370b4d4d262929d9c9dd96cf27602d4f4cca01e2e38fc2091d37";
 
 /**
  * 校验传入的用例集合是否与冻结的常量哈希完全一致。

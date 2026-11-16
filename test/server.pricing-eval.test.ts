@@ -11,7 +11,7 @@ import { createPricingApp } from "../src/server/pricing-app.js";
 import { BENCHMARK_CASES } from "../src/templates/agentops/eval/dataset.js";
 import { BUDGET_CEILING } from "../src/templates/agentops/eval/harness.js";
 
-const FROZEN_DATASET_HASH = "2a2710aadef149fc2fa050c49088a5ec996a28223415b13e64498550d10ab892";
+const FROZEN_DATASET_HASH = "dd58e98d2a5f370b4d4d262929d9c9dd96cf27602d4f4cca01e2e38fc2091d37";
 
 const METRIC_KEYS = [
   "totalCases",

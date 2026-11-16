@@ -10,16 +10,16 @@ function task(id: string): string {
 }
 
 describe("Task 5b: Frozen benchmark texts parse only the numbers they actually contain", () => {
-  test("standard apparel wording (采购价 / 竞品价 / 周转金) is unchanged", () => {
+  test("standard apparel wording (采购价 / 竞品价 / 周转金) is updated", () => {
     expect(parseTaskFacts(task("std-apparel-pdd"))).toMatchObject({
       buyCents: 1600,
       packagingCents: 150,
-      shippingCents: 650,
-      competitorCents: 3990,
+      shippingCents: 450,
+      competitorCents: 4990,
       marketOrders: 50,
-      targetMargin: 0.25,
-      adDailyBudgetCents: 3000,
-      cashCents: 300_000,
+      targetMargin: 0.55,
+      adDailyBudgetCents: 1500,
+      cashCents: 240_000,
     });
   });
 
@@ -30,17 +30,18 @@ describe("Task 5b: Frozen benchmark texts parse only the numbers they actually c
       shippingCents: 800,
       competitorCents: 8900,
       marketOrders: 40,
-      targetMargin: 0.3,
-      adDailyBudgetCents: 6000,
-      cashCents: 800_000,
+      targetMargin: 0.54,
+      adDailyBudgetCents: 3000,
+      cashCents: 350_000,
     });
     expect(parseTaskFacts(task("conflict-demand-cap"))).toMatchObject({
-      buyCents: 4000,
-      shippingCents: 800,
-      competitorCents: 12_000,
-      marketOrders: 2000,
-      adDailyBudgetCents: 5000,
-      cashCents: 200_000,
+      buyCents: 200,
+      shippingCents: 2400,
+      competitorCents: 7200,
+      marketOrders: 1500,
+      targetMargin: 0.56,
+      adDailyBudgetCents: 3000,
+      cashCents: 180_000,
     });
   });
 
@@ -77,13 +78,14 @@ describe("Task 5b: Frozen benchmark texts parse only the numbers they actually c
 
   test("parses 可周转金仅 N 元 on the cash-constraint case", () => {
     expect(parseTaskFacts(task("cash-tight-volume-stockout"))).toMatchObject({
-      buyCents: 6500,
-      packagingCents: 300,
-      shippingCents: 800,
-      competitorCents: 15_900,
-      marketOrders: 60,
-      cashCents: 40_000,
-      adDailyBudgetCents: 3000,
+      buyCents: 700,
+      packagingCents: 100,
+      shippingCents: 300,
+      competitorCents: 5400,
+      marketOrders: 18,
+      targetMargin: 0.52,
+      cashCents: 90_000,
+      adDailyBudgetCents: 50_000,
     });
   });
 

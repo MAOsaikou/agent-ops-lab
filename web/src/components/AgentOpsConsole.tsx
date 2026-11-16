@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   BookOpenCheck,
   Bot,
   CheckCircle2,
@@ -15,6 +16,8 @@ import {
   Settings2,
   Sparkles,
   StepForward,
+  Swords,
+  Trophy,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -49,6 +52,7 @@ import {
   submitRunDecision,
   type AgentCatalog,
   type LlmSettingsView,
+  type SimShopSourceProduct,
 } from "../lib/agentops.js";
 import { cn } from "../lib/cn.js";
 import { money, moneyInt, num, pct, shortHash } from "../lib/format.js";
@@ -63,6 +67,10 @@ import { ModelSettingsPanel } from "./ModelSettings.js";
 import { ActionButton, Panel, PanelHead, Pill, type PillTone } from "./Primitives.js";
 import { ProfitCurve } from "./ProfitCurve.js";
 import { SealStamp } from "./SealStamp.js";
+import { SimShopArena } from "./SimShopArena.js";
+import { TopologyBenchmarkView } from "./TopologyBenchmarkView.js";
+
+type ConsoleMode = "review" | "simshop" | "arena";
 
 const VERIFICATION_META: Record<
   VerificationStatus,
@@ -586,6 +594,8 @@ function LoopComparisonSection({
 }
 
 export function AgentOpsConsole(): React.JSX.Element {
+  const [activeMode, setActiveMode] = useState<ConsoleMode>("review");
+  const [simShopSourceProduct, setSimShopSourceProduct] = useState<SimShopSourceProduct | null>(null);
   const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
   const [runs, setRuns] = useState<readonly RunSummary[]>([]);
   const [task, setTask] = useState<string>(SCENARIO_PRESETS[0]?.text ?? "");
@@ -966,6 +976,73 @@ export function AgentOpsConsole(): React.JSX.Element {
       : { label: view.label, tone: view.tone as PillTone, summary: view.summary };
   const llmMeta = llmBadgeMeta(run?.llm ?? null, llm);
 
+  const handleBridgeToSimShop = (): void => {
+    const parsedFromTask = taskFacts ?? parseTaskFacts(task);
+    const productNameRaw = run?.artifacts.product?.name;
+    const validProductName =
+      productNameRaw !== undefined &&
+      productNameRaw.trim().length > 0 &&
+      productNameRaw !== "待确认商品"
+        ? productNameRaw.trim()
+        : null;
+    const keywordsLabel =
+      run?.artifacts.product?.keywords !== undefined &&
+      run.artifacts.product.keywords.trim().length > 0
+        ? run.artifacts.product.keywords
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .join("")
+        : null;
+    const presetLabel =
+      SCENARIO_PRESETS.find((preset) => preset.text === (run?.task.text ?? task))?.label ?? null;
+    const composeName = composeForm.name.trim();
+    const rawName =
+      validProductName ??
+      (composeName.length > 0 ? composeName : null) ??
+      keywordsLabel ??
+      presetLabel ??
+      productNameRaw ??
+      "";
+    const safeName = rawName.trim().slice(0, 80);
+    const rawPriceCents = activeCandidate?.priceCents;
+    const composeBuy = Number(composeForm.buyYuan);
+    const fallbackBuyCents =
+      Number.isFinite(composeBuy) && composeBuy >= 0 ? Math.round(composeBuy * 100) : null;
+    const rawBuyCents = unit?.buyCents ?? parsedFromTask.buyCents ?? fallbackBuyCents;
+    const composeComp = Number(composeForm.competitorYuan);
+    const fallbackCompCents =
+      Number.isFinite(composeComp) && composeComp > 0 ? Math.round(composeComp * 100) : null;
+    const rawCompetitorCents =
+      run?.artifacts.product?.competitorCents ??
+      parsedFromTask.competitorCents ??
+      fallbackCompCents;
+
+    const bridged: SimShopSourceProduct = {
+      ...(safeName.length > 0 ? { name: safeName } : {}),
+      ...(rawPriceCents !== undefined &&
+      Number.isInteger(rawPriceCents) &&
+      rawPriceCents >= 1 &&
+      rawPriceCents <= 100_000_000
+        ? { priceCents: rawPriceCents }
+        : {}),
+      ...(rawBuyCents !== null &&
+      Number.isInteger(rawBuyCents) &&
+      rawBuyCents >= 0 &&
+      rawBuyCents <= 100_000_000
+        ? { buyCents: rawBuyCents }
+        : {}),
+      ...(rawCompetitorCents !== null &&
+      Number.isInteger(rawCompetitorCents) &&
+      rawCompetitorCents >= 1 &&
+      rawCompetitorCents <= 100_000_000
+        ? { competitorCents: rawCompetitorCents }
+        : {}),
+    };
+    setSimShopSourceProduct(Object.keys(bridged).length > 0 ? bridged : null);
+    setActiveMode("simshop");
+  };
+
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1560px] flex-col gap-1.5 px-2 py-1 text-ink-900 sm:gap-4 sm:px-6 sm:py-4">
       <header className="flex flex-wrap items-center justify-between gap-1 rounded-2xl border border-paper-300 bg-paper-50 px-2.5 py-1 shadow-card sm:gap-3 sm:px-5 sm:py-3.5">
@@ -1016,41 +1093,98 @@ export function AgentOpsConsole(): React.JSX.Element {
         </div>
       </header>
 
-      <p
-        data-testid="simulation-disclaimer"
-        className="rounded-xl border border-paper-300 bg-paper-100/80 px-2.5 py-1.5 text-[11px] leading-snug text-ink-600 sm:px-3.5 sm:py-2 sm:text-[12px]"
+      <nav
+        aria-label="控制台模式切换"
+        data-testid="console-mode-tabs"
+        className="grid grid-cols-3 gap-1 rounded-xl border border-paper-300 bg-paper-50 p-1 shadow-card sm:flex sm:flex-wrap sm:items-center sm:gap-1.5"
       >
-        【仿真推演】利润和现金流是按 {SIM_DAYS} 天、{SIM_RUNS} 次随机情景汇总的推演，不是确定能赚到的钱，也不能当成真实收入。页面里的示例是用来走流程的构造数据，不是真实商户材料。
-      </p>
-
-      {openedFromHistory && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ochre-500/35 bg-ochre-100/70 px-3.5 py-2 text-[12.5px] text-ink-800">
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-ochre-600 shrink-0" />
-            <span>正在看历史卷宗 · 返回工作台</span>
-          </div>
-          <button
-            ref={historyBackRef}
-            type="button"
-            data-testid="history-back"
-            onClick={handleHistoryBack}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                e.preventDefault();
-                handleHistoryBack();
-              }
-            }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-ink-900 px-3 py-1.5 text-[12px] font-medium text-paper-50 shadow-sm transition hover:bg-ink-800 focus:outline-none focus:ring-2 focus:ring-ochre-500 focus:ring-offset-1 active:scale-[0.98]"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            返回工作台
-          </button>
-        </div>
-      )}
+        <button
+          type="button"
+          data-testid="nav-tab-review"
+          aria-pressed={activeMode === "review"}
+          onClick={() => setActiveMode("review")}
+          className={cn(
+            "inline-flex min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 py-1 text-[11px] font-semibold transition-colors sm:justify-start sm:px-3 sm:py-1.5 sm:text-[12.5px]",
+            activeMode === "review"
+              ? "bg-ink-900 text-paper-50 shadow-sm"
+              : "text-ink-600 hover:bg-paper-150 hover:text-ink-900",
+          )}
+        >
+          <BookOpenCheck className="hidden h-3.5 w-3.5 shrink-0 sm:inline" />
+          <span className="truncate sm:hidden">1.单品会签</span>
+          <span className="hidden sm:inline">1. 单品多维会签台</span>
+        </button>
+        <button
+          type="button"
+          data-testid="nav-tab-simshop"
+          aria-pressed={activeMode === "simshop"}
+          onClick={() => setActiveMode("simshop")}
+          className={cn(
+            "inline-flex min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 py-1 text-[11px] font-semibold transition-colors sm:justify-start sm:px-3 sm:py-1.5 sm:text-[12.5px]",
+            activeMode === "simshop"
+              ? "bg-ink-900 text-paper-50 shadow-sm"
+              : "text-ink-600 hover:bg-paper-150 hover:text-ink-900",
+          )}
+        >
+          <Swords className="hidden h-3.5 w-3.5 shrink-0 sm:inline" />
+          <span className="truncate sm:hidden">2.市场博弈</span>
+          <span className="hidden sm:inline">2. 8回合动态市场与供应链博弈</span>
+        </button>
+        <button
+          type="button"
+          data-testid="nav-tab-arena"
+          aria-pressed={activeMode === "arena"}
+          onClick={() => setActiveMode("arena")}
+          className={cn(
+            "inline-flex min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 py-1 text-[11px] font-semibold transition-colors sm:justify-start sm:px-3 sm:py-1.5 sm:text-[12.5px]",
+            activeMode === "arena"
+              ? "bg-ink-900 text-paper-50 shadow-sm"
+              : "text-ink-600 hover:bg-paper-150 hover:text-ink-900",
+          )}
+        >
+          <Trophy className="hidden h-3.5 w-3.5 shrink-0 sm:inline" />
+          <span className="truncate sm:hidden">3.评测竞技</span>
+          <span className="hidden sm:inline">3. 多Agent vs 单Agent 评测竞技场</span>
+        </button>
+      </nav>
 
       {settingsOpen ? (
         <ModelSettingsPanel onClose={() => setSettingsOpen(false)} onChanged={setLlm} />
       ) : null}
+
+      {activeMode === "review" ? (
+        <>
+          <p
+            data-testid="simulation-disclaimer"
+            className="rounded-xl border border-paper-300 bg-paper-100/80 px-2.5 py-1.5 text-[11px] leading-snug text-ink-600 sm:px-3.5 sm:py-2 sm:text-[12px]"
+          >
+            【仿真推演】利润和现金流是按 {SIM_DAYS} 天、{SIM_RUNS} 次随机情景汇总的推演，不是确定能赚到的钱，也不能当成真实收入。页面里的示例是用来走流程的构造数据，不是真实商户材料。
+          </p>
+
+          {openedFromHistory && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ochre-500/35 bg-ochre-100/70 px-3.5 py-2 text-[12.5px] text-ink-800">
+              <div className="flex items-center gap-2">
+                <History className="h-4 w-4 text-ochre-600 shrink-0" />
+                <span>正在看历史卷宗 · 返回工作台</span>
+              </div>
+              <button
+                ref={historyBackRef}
+                type="button"
+                data-testid="history-back"
+                onClick={handleHistoryBack}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    handleHistoryBack();
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-ink-900 px-3 py-1.5 text-[12px] font-medium text-paper-50 shadow-sm transition hover:bg-ink-800 focus:outline-none focus:ring-2 focus:ring-ochre-500 focus:ring-offset-1 active:scale-[0.98]"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                返回工作台
+              </button>
+            </div>
+          )}
 
       <Panel className={run === null ? "order-0" : "order-2"}>
         <PanelHead
@@ -1719,6 +1853,21 @@ export function AgentOpsConsole(): React.JSX.Element {
                 </div>
               ) : null}
               </div></details>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-paper-300/80 bg-paper-100/50 px-3 py-2">
+                <span className="text-[11px] text-ink-600">
+                  可将当前商品售价、成本与竞品价带入 8 回合动态市场（断供议价 / 价格战）继续演练
+                </span>
+                <button
+                  type="button"
+                  data-testid="bridge-to-simshop"
+                  onClick={handleBridgeToSimShop}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-jade-500/40 bg-jade-100/70 px-3 py-1.5 text-[11.5px] font-semibold text-jade-600 transition-colors hover:bg-jade-100"
+                >
+                  <Swords className="h-3.5 w-3.5" />
+                  带入 8 回合动态市场博弈沙盘
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
           </Panel>
           <DeliberationBoard report={run?.artifacts.deliberation} running={busy} />
@@ -2355,6 +2504,15 @@ export function AgentOpsConsole(): React.JSX.Element {
           )}
         </div>
       </footer>
+        </>
+      ) : activeMode === "simshop" ? (
+        <SimShopArena
+          sourceProduct={simShopSourceProduct}
+          onClearSourceProduct={() => setSimShopSourceProduct(null)}
+        />
+      ) : (
+        <TopologyBenchmarkView />
+      )}
     </div>
   );
 }
