@@ -36,35 +36,46 @@ import {
 } from "../lib/agentops.js";
 import { cn } from "../lib/cn.js";
 import { money, pct, shortHash } from "../lib/format.js";
+import { PlainGuideBanner } from "./PlainGuideBanner.js";
 import { ActionButton, Panel, PanelHead, Pill, type PillTone } from "./Primitives.js";
 
 const TOPOLOGY_META: Readonly<
   Record<
     EvalTopologyName,
-    { readonly label: string; readonly shortLabel: string; readonly color: string; readonly tone: PillTone }
+    {
+      readonly label: string;
+      readonly shortLabel: string;
+      readonly plainDesc: string;
+      readonly color: string;
+      readonly tone: PillTone;
+    }
   >
 > = {
   rule: {
     label: "静态规则基线 (rule)",
     shortLabel: "静态规则",
+    plainDesc: "只按死公式算账，不会改错也不会砍价",
     color: "#8c8172",
     tone: "ink",
   },
   "single-agent": {
     label: "单 Agent (single-agent)",
     shortLabel: "单 Agent",
+    plainDesc: "1个全能AI包揽全部活，没人帮它挑刺复核",
     color: "#b07a2e",
     tone: "ochre",
   },
   "collab-no-review": {
     label: "无审多 Agent (collab-no-review)",
     shortLabel: "无审多 Agent",
+    plainDesc: "多AI分工干活，但没有风控把关和自动改错",
     color: "#c4442b",
     tone: "seal",
   },
   "collab-with-review": {
     label: "完整多 Agent 会签 (collab-with-review)",
     shortLabel: "完整多 Agent",
+    plainDesc: "多角色分工 + 交叉挑刺 + 风控把关 + 自动改错",
     color: "#2e6b52",
     tone: "jade",
   },
@@ -283,10 +294,11 @@ export function TopologyBenchmarkView({
 
   return (
     <div data-testid="topology-benchmark-view" className="flex min-w-0 flex-col gap-3 sm:gap-4">
+      <PlainGuideBanner mode="arena" />
       <Panel>
         <PanelHead
           title="多 Agent vs 单 Agent 双基准评测竞技场"
-          desc="同屏公平对照 rule、single-agent、collab-no-review、collab-with-review 四种编排拓扑，覆盖 12 案冻结上架会签（Part A）与 8 回合动态市场博弈（Part B）。"
+          desc="同屏公平对照 4 种 AI 工作模式（编排拓扑），覆盖 12 道商品上架难题（Part A）与 8 回合动态市场经营实战（Part B）。"
           right={
             evalResult === null ? (
               <Pill tone="plain">待评测</Pill>
@@ -427,7 +439,7 @@ export function TopologyBenchmarkView({
         <Panel data-testid="arena-part-a">
           <PanelHead
             title="Part A · 12 案商品上架会签评测基准（4 拓扑同屏 PK）"
-            desc={`统一预算上限：maxTokens=${String(evalResult.budgetCeiling.maxTokens)} · maxToolCalls=${String(evalResult.budgetCeiling.maxToolCalls)} · timeoutMs=${String(evalResult.budgetCeiling.timeoutMs)}`}
+            desc={`【大白话：拿 12 道有坑的商品上架考卷同时考这 4 种模式，看谁能看穿风险不踩坑】统一预算上限：maxTokens=${String(evalResult.budgetCeiling.maxTokens)} · maxToolCalls=${String(evalResult.budgetCeiling.maxToolCalls)} · timeoutMs=${String(evalResult.budgetCeiling.timeoutMs)}`}
             right={
               <span className="font-mono text-[10.5px] text-ink-500">
                 hash: {shortHash(evalResult.datasetHash, 14)}
@@ -477,6 +489,7 @@ export function TopologyBenchmarkView({
                       </Pill>
                     </div>
                     <div className="mt-0.5 font-mono text-[10.5px] text-ink-400">{topology}</div>
+                    <p className="mt-1 text-[11px] leading-snug text-ink-600">{meta.plainDesc}</p>
 
                     <dl className="mt-2.5 grid grid-cols-2 gap-y-1.5 text-[11.5px] tabular">
                       <div>
@@ -697,7 +710,7 @@ export function TopologyBenchmarkView({
         <Panel data-testid="arena-part-b">
           <PanelHead
             title="Part B · 8 回合动态市场博弈 4 拓扑同屏对比"
-            desc={`评测场景：${campaignResult.scenarios.join(" / ")} · 随机种子：${String(campaignResult.seed)} · 每局 ${String(campaignResult.roundsPerRun)} 回合`}
+            desc={`【大白话：让 4 种模式分别去管同一家网店 8 个回合，历经大促、断供、价格战，看谁赚得多、不断货】评测场景：${campaignResult.scenarios.join(" / ")} · 随机种子：${String(campaignResult.seed)} · 每局 ${String(campaignResult.roundsPerRun)} 回合`}
             right={
               <Pill tone="jade">
                 <GitCompare className="h-3 w-3" />

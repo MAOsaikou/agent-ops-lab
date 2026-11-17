@@ -68,6 +68,7 @@ import { CostBreakdown } from "./CostBreakdown.js";
 import { DeliberationBoard } from "./DeliberationBoard.js";
 import { FollowUpAnswers, type FollowUpItem } from "./FollowUpAnswers.js";
 import { ModelSettingsPanel } from "./ModelSettings.js";
+import { PlainGuideBanner } from "./PlainGuideBanner.js";
 import { ActionButton, Panel, PanelHead, Pill, type PillTone } from "./Primitives.js";
 import { ProfitCurve } from "./ProfitCurve.js";
 import { SealStamp } from "./SealStamp.js";
@@ -348,6 +349,9 @@ function CredentialLine({
       <summary className="cursor-pointer select-none text-[11px] text-ink-400 hover:text-ink-600">
         查看凭证
       </summary>
+      <p className="mt-1 text-[10.5px] leading-relaxed text-ink-500">
+        白话说明：这是本环节的防篡改电子封条（SHA-256），把执行角色、调度得分和前后指纹串成链，确保结果可追溯、不可偷改。
+      </p>
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px] text-ink-400">
         <span>
           {agentSpec ? `${agentSpec.name} (v${agentSpec.version})` : (lastEvent?.agentId ?? nodeId)}
@@ -394,6 +398,9 @@ function LoopComparisonSection({
           <RotateCcw className="h-4 w-4 text-ochre-500" />
           <span className="font-display text-[15px] font-semibold text-ink-900">
             五、改过什么
+            <span className="hidden sm:inline ml-1.5 text-[11.5px] font-normal text-ink-500">
+              （自动调参 / Self-Loop）
+            </span>
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -1232,7 +1239,7 @@ export function AgentOpsConsole(): React.JSX.Element {
               </span>
             </div>
             <p className="mt-0.5 hidden text-[12px] text-ink-500 sm:block">
-              先算清成本，再比三套策略，改完由你拍板
+              先算清每单成本与保本底线，再比「稳价 / 跟价 / 冲量」三套方案，自动改完风险后由你拍板
             </p>
           </div>
         </div>
@@ -1291,7 +1298,10 @@ export function AgentOpsConsole(): React.JSX.Element {
         >
           <BookOpenCheck className="hidden h-3.5 w-3.5 shrink-0 sm:inline" />
           <span className="truncate sm:hidden">1.单品会签</span>
-          <span className="hidden sm:inline">1. 单品多维会签台</span>
+          <span className="hidden sm:inline">
+            1. 单品多维会签台
+            <span className="hidden lg:inline ml-1 text-[11px] font-normal opacity-75">（算单品能不能上架）</span>
+          </span>
         </button>
         <button
           type="button"
@@ -1307,7 +1317,10 @@ export function AgentOpsConsole(): React.JSX.Element {
         >
           <Swords className="hidden h-3.5 w-3.5 shrink-0 sm:inline" />
           <span className="truncate sm:hidden">2.市场博弈</span>
-          <span className="hidden sm:inline">2. 8回合动态市场与供应链博弈</span>
+          <span className="hidden sm:inline">
+            2. 8回合动态市场与供应链博弈
+            <span className="hidden lg:inline ml-1 text-[11px] font-normal opacity-75">（模拟断供与价格战）</span>
+          </span>
         </button>
         <button
           type="button"
@@ -1323,7 +1336,10 @@ export function AgentOpsConsole(): React.JSX.Element {
         >
           <Trophy className="hidden h-3.5 w-3.5 shrink-0 sm:inline" />
           <span className="truncate sm:hidden">3.评测竞技</span>
-          <span className="hidden sm:inline">3. 多Agent vs 单Agent 评测竞技场</span>
+          <span className="hidden sm:inline">
+            3. 多Agent vs 单Agent 评测竞技场
+            <span className="hidden lg:inline ml-1 text-[11px] font-normal opacity-75">（4种模式跑分对比）</span>
+          </span>
         </button>
       </nav>
 
@@ -1339,6 +1355,8 @@ export function AgentOpsConsole(): React.JSX.Element {
           >
             【仿真推演】利润和现金流是按 {SIM_DAYS} 天、{SIM_RUNS} 次随机情景汇总的推演，不是确定能赚到的钱，也不能当成真实收入。页面里的示例是用来走流程的构造数据，不是真实商户材料。
           </p>
+
+          <PlainGuideBanner mode="review" compactOnMobile={run !== null} />
 
           {openedFromHistory && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ochre-500/35 bg-ochre-100/70 px-3.5 py-2 text-[12.5px] text-ink-800">
@@ -1753,7 +1771,12 @@ export function AgentOpsConsole(): React.JSX.Element {
               {activeCandidate === undefined ? null : <section data-testid="decision-overview" aria-label="决策摘要" className="rounded-xl bg-ink-900 px-3 py-2.5 text-paper-50 sm:px-5 sm:py-4">
                 <div className="mb-1.5 flex flex-wrap items-center justify-between gap-1 text-xs text-paper-300 sm:mb-2"><span className="min-w-0 max-w-full truncate">{run?.artifacts.product?.name ?? "商品评审"} / {activeCandidate.id === run?.artifacts.chosenId ? "推荐" : "当前检视"} {activeCandidate.label}</span><span className="hidden sm:inline">30 天情景试算</span></div>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-4 sm:gap-y-3">
-                  {[{ label: "建议售价", value: money(activeCandidate.priceCents) }, { label: "毛利率", value: pct(activeCandidate.evaluation.daily.margin) }, { label: "较差情况利润 p10", value: moneyInt(activeCandidate.sim.p10Cents) }, { label: "保本红线", value: money(breakEvenCents) }].map((metric) => <div key={metric.label}><dt className="text-[10.5px] text-paper-300">{metric.label}</dt><dd data-testid={metric.label === "保本红线" ? "break-even-price" : undefined} className="mt-0.5 font-display text-lg font-semibold tabular sm:mt-1 sm:text-2xl">{metric.value}</dd></div>)}
+                  {[
+                    { label: "建议售价", value: money(activeCandidate.priceCents), hint: "日常标价（含活动折前）" },
+                    { label: "毛利率", value: pct(activeCandidate.evaluation.daily.margin), hint: "扣除各项成本后的利润率" },
+                    { label: "较差情况利润 p10", value: moneyInt(activeCandidate.sim.p10Cents), hint: "行情较差时的 30 天保底估算" },
+                    { label: "保本红线", value: money(breakEvenCents), hint: "不亏本最低价，低于它卖一单亏一单" },
+                  ].map((metric) => <div key={metric.label}><dt className="text-[10.5px] text-paper-300">{metric.label}</dt><dd data-testid={metric.label === "保本红线" ? "break-even-price" : undefined} className="mt-0.5 font-display text-lg font-semibold tabular sm:mt-1 sm:text-2xl">{metric.value}</dd><dd className="hidden sm:block text-[10px] text-paper-300/80">{metric.hint}</dd></div>)}
                 </dl>
               </section>}
               {run?.llm.mode === "fallback" ? <div data-testid="model-fallback-notice" className="rounded-lg border border-ochre-500/30 bg-ochre-100/60 px-3 py-2 text-xs leading-relaxed text-ink-700"><strong>模型未完成，已保留本地核算。</strong> {run.llm.note}<span className="block text-ink-600">下方建议包含规则结果；未完成的模型意见不会当作已通过会签。</span></div> : null}

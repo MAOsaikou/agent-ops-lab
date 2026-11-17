@@ -47,6 +47,7 @@ import {
 } from "../lib/agentops.js";
 import { cn } from "../lib/cn.js";
 import { money, shortHash } from "../lib/format.js";
+import { PlainGuideBanner } from "./PlainGuideBanner.js";
 import { ActionButton, Panel, PanelHead, Pill, type PillTone } from "./Primitives.js";
 
 const PROFILE_OPTIONS: readonly {
@@ -59,13 +60,15 @@ const PROFILE_OPTIONS: readonly {
     id: "steady",
     label: "稳健完整编排 (steady)",
     badge: "按需子流 + 边际仲裁 + 热升级",
-    summary: "触发断供时激活 3 轮议价子工作流；价格战触发负边际归零仲裁；Critic 核验通过并完成版本热升级。",
+    summary:
+      "正常情况按需补货；遇到断供时激活 3 轮议价子工作流找备用厂家砍价；遇到价格战触发负边际归零仲裁防亏本；Critic 核验通过并完成版本热升级。",
   },
   {
     id: "stressed",
     label: "高压极限测试 (stressed)",
     badge: "Critic 驳回 + 3 轮修正回退",
-    summary: "注入超预算高风险提案，检验 Critic 拦截、3 轮 revisionLoop 耗尽与规则兜底安全收敛。",
+    summary:
+      "故意注入超预算高风险提案（压力测试），检验风控 Critic 拦截、连续 3 轮 revisionLoop 修改耗尽后自动启用规则兜底安全收敛。",
   },
 ];
 
@@ -74,13 +77,13 @@ const WORKFLOW_PIPELINE_STEPS: readonly {
   readonly label: string;
   readonly desc: string;
 }[] = [
-  { id: "plan", label: "1. 动态规划器", desc: "按信号与预算裁决激活子流" },
-  { id: "proposals", label: "2. 三方并行提案", desc: "buyer / pricer / marketer" },
-  { id: "price-war", label: "3. 价格战分支", desc: "marginalBids 边际收益仲裁" },
-  { id: "supply", label: "4. 断供分支", desc: "supply-negotiation 三轮议价" },
-  { id: "revise", label: "5. Critic 修正环", desc: "规则与预测门禁多轮复核" },
-  { id: "reflect", label: "6. 跨回合复盘", desc: "生成补丁触发 pricer 热升级" },
-  { id: "seal", label: "7. SHA-256 封存", desc: "commit + settle + reflect" },
+  { id: "plan", label: "1. 动态规划器", desc: "看有没有断供或价格战，按需启动子流程" },
+  { id: "proposals", label: "2. 三方并行提案", desc: "采购/定价/推广同时出方案 (buyer/pricer/marketer)" },
+  { id: "price-war", label: "3. 价格战分支", desc: "算跟风降价亏不亏 (marginalBids 边际仲裁)" },
+  { id: "supply", label: "4. 断供分支", desc: "找备用厂家最多谈3轮价 (supply-negotiation)" },
+  { id: "revise", label: "5. Critic 修正环", desc: "风控官审核，不合格打回重改" },
+  { id: "reflect", label: "6. 跨回合复盘", desc: "总结上回合经验，自动升级定价策略 (热升级)" },
+  { id: "seal", label: "7. SHA-256 封存", desc: "结算本回合利润，锁入防篡改账本" },
 ];
 
 function rulingTone(ruling: "accept" | "counter" | "walk"): PillTone {
@@ -378,8 +381,9 @@ export function SimShopArena({
 
   return (
     <div data-testid="simshop-arena" className="flex min-w-0 flex-col gap-3 sm:gap-4">
+      <PlainGuideBanner mode="simshop" />
       <p className="rounded-xl border border-paper-300 bg-paper-100/80 px-3 py-2 text-[11.5px] leading-relaxed text-ink-600">
-        【仿真推演 · 确定性双 SKU 沙盘】基于 U5 市场规则与 Mock LLM 多 Agent 编排运行 8 回合博弈（茶叶礼盒 tea / 坚果零食 snack），所有决策与结算实时写入不可逆 SHA-256 哈希链。
+        【仿真推演 · 确定性双 SKU 沙盘】模拟网店同时经营「茶叶礼盒 (tea)」和「坚果零食 (snack)」两款商品，连续跑完 8 个回合。检验多 Agent 团队在遇到「厂家断供」和「同行价格战」时，如何自动砍价、管住推广预算、自我升级策略，并将每回合账本写入不可逆 SHA-256 哈希链。
       </p>
 
       {sourceProduct === null ? null : (
@@ -904,6 +908,9 @@ export function SimShopArena({
                       : "未触发版本变更"}
                   </Pill>
                 </div>
+                <p className="mt-1 text-[11px] text-ink-500">
+                  白话说明：「热升级」就像吃一堑长一智——第 1 回合跑完后系统复盘市场反馈，自动把定价角色从 1.0.0 升级到 1.0.1。
+                </p>
 
                 {displayedRun.versionUpgrades.length === 0 ? (
                   <p className="mt-2 text-[12px] text-ink-500">
@@ -1102,7 +1109,7 @@ export function SimShopArena({
           <Panel data-testid="simshop-negotiation-panel">
             <PanelHead
               title="二、供应链断供三轮议价子工作流谈判走势表"
-              desc="主供应商产能归零时由规划器按需唤醒 supply-negotiation 子流；经底价脱敏校验（screenTalk）与最多 3 轮让步报价（accept / counter / walk）完成备供切换。"
+              desc="【白话说明：主力厂家没货时，AI 自动找备用厂家最多砍价 3 轮，并自动拦截说漏底价的话术】主供应商产能归零时由规划器按需唤醒 supply-negotiation 子流；经底价脱敏校验（screenTalk）与最多 3 轮让步报价（accept / counter / walk）完成备供切换。"
               right={
                 <Pill tone={visibleQuotes.length > 0 ? "ochre" : "ink"}>
                   <Truck className="h-3 w-3" />
@@ -1167,7 +1174,7 @@ export function SimShopArena({
           <Panel data-testid="simshop-pricewar-panel">
             <PanelHead
               title="三、竞品价格战边际收益预算仲裁台"
-              desc="当竞品突然恶性降价时，沙盘先测算「降价」与「加投流」两项动作的边际期望收益；若边际收益 ≤ 0，则强制分配 0 元以防越卖越亏。"
+              desc="【白话说明：同行把价格腰斩时，先算跟风降价或加广告会不会多卖多亏；如果倒贴钱就直接批 0 元预算】当竞品突然恶性降价时，沙盘先测算「降价」与「加投流」两项动作的边际期望收益；若边际收益 ≤ 0，则强制分配 0 元以防越卖越亏。"
               right={
                 <Pill tone={visiblePriceWars.length > 0 ? "seal" : "ink"}>
                   <TrendingDown className="h-3 w-3" />
@@ -1323,7 +1330,7 @@ export function SimShopArena({
           <Panel data-testid="simshop-ledger-panel">
             <PanelHead
               title="四、8 回合不可逆 SHA-256 哈希账本与防篡改边界"
-              desc="每回合结算均串联上一回合哈希（prevHash → hash）。点击任一回合「尝试重做/篡改」将真实请求 POST /api/simshop/runs/:runId/rounds/:round/commit，验证服务端 409 round-locked 拒绝边界。"
+              desc="【白话说明：每回合算完账都会盖上防伪指纹锁死；点右侧「尝试重做/篡改」可测试系统如何拦截事后改账】每回合结算均串联上一回合哈希（prevHash → hash）。点击任一回合「尝试重做/篡改」将真实请求 POST /api/simshop/runs/:runId/rounds/:round/commit，验证服务端 409 round-locked 拒绝边界。"
               right={
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Pill tone={displayedRun.ledger.matchesRunHash ? "jade" : "seal"}>

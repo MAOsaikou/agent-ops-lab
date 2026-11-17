@@ -9,6 +9,13 @@ test.describe("SimShop 8回合博弈沙盘与多Agent评测竞技场", () => {
 
     await page.goto("/");
     await expect(page.getByTestId("nav-tab-review")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("plain-guide-banner")).toContainText("算单品能不能上架");
+    const reviewGlossary = page.getByTestId("plain-glossary-details");
+    await expect(reviewGlossary).not.toHaveAttribute("open", "");
+    await reviewGlossary.locator("summary").click();
+    await expect(reviewGlossary).toHaveAttribute("open", "");
+    await expect(reviewGlossary).toContainText("不赚不亏的最低卖价");
+    await reviewGlossary.locator("summary").click();
 
     // 1. 在单品会签台跑通场景 1 并通过结论区快捷按钮带入 SimShop 沙盘
     await page.getByTestId("scenario-1").click();
@@ -20,6 +27,9 @@ test.describe("SimShop 8回合博弈沙盘与多Agent评测竞技场", () => {
     await page.getByTestId("bridge-to-simshop").click();
     await expect(page.getByTestId("simshop-arena")).toBeVisible();
     await expect(page.getByTestId("nav-tab-simshop")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("simshop-arena").getByTestId("plain-guide-banner")).toContainText(
+      "模拟网店连续经营 8 回合",
+    );
     await expect(page.getByTestId("simshop-source-context")).toContainText("纯棉短袖");
     await expect(page.getByTestId("simshop-source-context")).toContainText("¥16.00");
     await expect(page.getByTestId("simshop-source-context")).toContainText("¥39.90");
@@ -109,6 +119,13 @@ test.describe("SimShop 8回合博弈沙盘与多Agent评测竞技场", () => {
     await page.goto("/");
     await page.getByTestId("nav-tab-arena").click();
     await expect(page.getByTestId("topology-benchmark-view")).toBeVisible();
+    await expect(page.getByTestId("topology-benchmark-view").getByTestId("plain-guide-banner")).toContainText(
+      "4 种 AI 工作模式同台对比考卷",
+    );
+    const arenaGlossary = page.getByTestId("topology-benchmark-view").getByTestId("plain-glossary-details");
+    await arenaGlossary.locator("summary").click();
+    await expect(arenaGlossary).toContainText("AI 团队的组织架构/工作模式");
+    await arenaGlossary.locator("summary").click();
 
     await page.getByTestId("arena-run-eval-button").click();
     await expect(page.getByTestId("arena-part-a")).toBeVisible({ timeout: 45_000 });
