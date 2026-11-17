@@ -30,7 +30,7 @@ export type LlmSettingsStore = {
 };
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
-const DEFAULT_MODEL = "deepseek-flash";
+const DEFAULT_MODEL = "deepseek-chat";
 
 function mask(key: string): string {
   if (key.length === 0) return "";
@@ -141,7 +141,7 @@ export function openLlmSettingsStore(file: string | null, env: NodeJS.ProcessEnv
       };
       if (record["clearKey"] === true) next.apiKey = "";
       if (next.enabled && next.model.length === 0) {
-        throw new Error("启用模型节点前请先填写模型名（如 deepseek-flash）");
+        throw new Error("启用模型节点前请先填写模型名（如 deepseek-chat）");
       }
       current = next;
       if (file !== null) {

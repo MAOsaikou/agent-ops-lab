@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Cpu,
+  FastForward,
   GitBranch,
   History,
   Lock,
@@ -17,7 +18,7 @@ import {
   Truck,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -102,9 +103,11 @@ function formatCentsSigned(centsValue: number): string {
 export function SimShopArena({
   sourceProduct,
   onClearSourceProduct,
+  pacingEnabled = false,
 }: {
   readonly sourceProduct: SimShopSourceProduct | null;
   readonly onClearSourceProduct: () => void;
+  readonly pacingEnabled?: boolean;
 }): React.JSX.Element {
   const [scenarios, setScenarios] = useState<readonly SimShopScenarioDetail[]>([]);
   const [runsHistory, setRunsHistory] = useState<readonly SimShopRunMeta[]>([]);
@@ -115,10 +118,29 @@ export function SimShopArena({
   const [selectedRound, setSelectedRound] = useState<number | "all">("all");
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [simPacingStep, setSimPacingStep] = useState<number | null>(null);
+  const simTimerRef = useRef<number | null>(null);
 
   const [tamperBusyRound, setTamperBusyRound] = useState<number | null>(null);
   const [tamperConflict, setTamperConflict] = useState<SimShopCommitConflict | null>(null);
   const [tamperNotice, setTamperNotice] = useState<string | null>(null);
+
+  const stopSimPacing = (): void => {
+    if (simTimerRef.current !== null) {
+      window.clearInterval(simTimerRef.current);
+      simTimerRef.current = null;
+    }
+    setSimPacingStep(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (simTimerRef.current !== null) {
+        window.clearInterval(simTimerRef.current);
+        simTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -159,6 +181,7 @@ export function SimShopArena({
       return;
     }
 
+    stopSimPacing();
     setBusy(true);
     setError(null);
     setTamperConflict(null);
@@ -175,6 +198,20 @@ export function SimShopArena({
       setSelectedRound("all");
       const latest = await fetchSimShopRuns().catch(() => null);
       if (latest !== null) setRunsHistory(latest);
+      if (pacingEnabled && created.rounds.length > 0) {
+        const totalSteps = created.rounds.length * WORKFLOW_PIPELINE_STEPS.length;
+        const stepMs = Math.max(70, Math.floor(5600 / totalSteps));
+        let currentStep = 0;
+        setSimPacingStep(0);
+        simTimerRef.current = window.setInterval(() => {
+          currentStep += 1;
+          if (currentStep >= totalSteps) {
+            stopSimPacing();
+            return;
+          }
+          setSimPacingStep(currentStep);
+        }, stepMs);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "启动 8 回合博弈失败");
     } finally {
@@ -184,6 +221,7 @@ export function SimShopArena({
 
   const handleOpenHistoryRun = async (runId: string): Promise<void> => {
     if (busy) return;
+    stopSimPacing();
     setBusy(true);
     setError(null);
     setTamperConflict(null);
@@ -204,6 +242,7 @@ export function SimShopArena({
 
   const handleTamperAttempt = async (roundIndex: number): Promise<void> => {
     if (activeRun === null || tamperBusyRound !== null) return;
+    stopSimPacing();
     setTamperBusyRound(roundIndex);
     setTamperNotice(null);
     try {
@@ -224,33 +263,90 @@ export function SimShopArena({
     }
   };
 
+  const pacingActive = simPacingStep !== null && activeRun !== null;
+  const pacingRoundIndex =
+    pacingActive && activeRun !== null
+      ? Math.min(activeRun.rounds.length - 1, Math.floor(simPacingStep / WORKFLOW_PIPELINE_STEPS.length))
+      : null;
+  const pacingStageIndex =
+    pacingActive ? simPacingStep % WORKFLOW_PIPELINE_STEPS.length : null;
+
+  const displayedRun: SimShopRunView | null = useMemo(() => {
+    if (activeRun === null) return null;
+    if (pacingRoundIndex === null) return activeRun;
+    const rounds = activeRun.rounds.slice(0, pacingRoundIndex + 1);
+    const quotes = activeRun.quotes.filter((q) => q.round <= pacingRoundIndex);
+    const priceWars = activeRun.priceWars.filter((p) => p.round <= pacingRoundIndex);
+    const loops = activeRun.loops.filter((l) => l.round <= pacingRoundIndex);
+    const versionUpgrades = activeRun.versionUpgrades.filter((u) => u.round <= pacingRoundIndex);
+    const ledgerRounds = activeRun.ledger.rounds.slice(0, pacingRoundIndex + 1);
+    const lastOutcome = rounds.at(-1)?.outcome ?? null;
+    return {
+      ...activeRun,
+      rounds,
+      quotes,
+      priceWars,
+      loops,
+      versionUpgrades,
+      ledger: {
+        ...activeRun.ledger,
+        rounds: ledgerRounds,
+      },
+      totals: {
+        totalProfit: rounds.reduce((s, r) => s + (r.outcome?.profit ?? 0), 0),
+        totalRevenue: rounds.reduce((s, r) => s + (r.outcome?.revenue ?? 0), 0),
+        totalOrderCost: rounds.reduce((s, r) => s + (r.outcome?.orderCost ?? 0), 0),
+        totalHolding: rounds.reduce((s, r) => s + (r.outcome?.holding ?? 0), 0),
+        totalAdSpend: rounds.reduce((s, r) => s + (r.outcome?.adSpend ?? 0), 0),
+        totalSales: rounds.reduce((s, r) => s + (r.outcome?.sales ?? 0), 0),
+        totalMissed: rounds.reduce((s, r) => s + (r.outcome?.missed ?? 0), 0),
+        finalCash: lastOutcome?.cash ?? activeRun.scenarioInfo.initial.cash,
+        finalReputation: lastOutcome?.reputation ?? activeRun.scenarioInfo.initial.reputation,
+        minInventory:
+          rounds.length > 0
+            ? Math.min(
+                ...rounds.map((r) =>
+                  r.outcome ? Math.min(r.outcome.inventory.tea, r.outcome.inventory.snack) : 9999,
+                ),
+              )
+            : activeRun.totals.minInventory,
+        totalCalls: rounds.reduce((s, r) => s + r.calls, 0),
+        totalQuotes: quotes.length,
+        acceptedQuotes: quotes.filter((q) => q.ruling === "accept").length,
+        priceWarCount: priceWars.length,
+        versionUpgradeCount: versionUpgrades.length,
+        fallbackRounds: rounds.filter((r) => r.usedFallback).length,
+      },
+    };
+  }, [activeRun, pacingRoundIndex]);
+
   const visibleRounds: readonly SimShopRoundView[] = useMemo(() => {
-    if (activeRun === null) return [];
-    if (selectedRound === "all") return activeRun.rounds;
-    return activeRun.rounds.filter((item) => item.round === selectedRound);
-  }, [activeRun, selectedRound]);
+    if (displayedRun === null) return [];
+    if (selectedRound === "all") return displayedRun.rounds;
+    return displayedRun.rounds.filter((item) => item.round === selectedRound);
+  }, [displayedRun, selectedRound]);
 
   const visibleQuotes = useMemo(() => {
-    if (activeRun === null) return [];
-    if (selectedRound === "all") return activeRun.quotes;
-    return activeRun.quotes.filter((item) => item.round === selectedRound);
-  }, [activeRun, selectedRound]);
+    if (displayedRun === null) return [];
+    if (selectedRound === "all") return displayedRun.quotes;
+    return displayedRun.quotes.filter((item) => item.round === selectedRound);
+  }, [displayedRun, selectedRound]);
 
   const visiblePriceWars = useMemo(() => {
-    if (activeRun === null) return [];
-    if (selectedRound === "all") return activeRun.priceWars;
-    return activeRun.priceWars.filter((item) => item.round === selectedRound);
-  }, [activeRun, selectedRound]);
+    if (displayedRun === null) return [];
+    if (selectedRound === "all") return displayedRun.priceWars;
+    return displayedRun.priceWars.filter((item) => item.round === selectedRound);
+  }, [displayedRun, selectedRound]);
 
   const visibleLoops = useMemo(() => {
-    if (activeRun === null) return [];
-    if (selectedRound === "all") return activeRun.loops;
-    return activeRun.loops.filter((item) => item.round === selectedRound);
-  }, [activeRun, selectedRound]);
+    if (displayedRun === null) return [];
+    if (selectedRound === "all") return displayedRun.loops;
+    return displayedRun.loops.filter((item) => item.round === selectedRound);
+  }, [displayedRun, selectedRound]);
 
   const roundChartData = useMemo(() => {
-    if (activeRun === null) return [];
-    return activeRun.rounds.map((row) => ({
+    if (displayedRun === null) return [];
+    return displayedRun.rounds.map((row) => ({
       name: `R${String(row.round + 1)}`,
       roundLabel: row.roundLabel,
       profitYuan: Math.round((row.outcome?.profit ?? 0)) / 100,
@@ -258,9 +354,10 @@ export function SimShopArena({
       reputation: row.outcome?.reputation ?? 0,
       missed: row.outcome?.missed ?? 0,
     }));
-  }, [activeRun]);
+  }, [displayedRun]);
 
   const stepPrev = (): void => {
+    stopSimPacing();
     if (activeRun === null || activeRun.rounds.length === 0) return;
     if (selectedRound === "all") {
       setSelectedRound(0);
@@ -270,6 +367,7 @@ export function SimShopArena({
   };
 
   const stepNext = (): void => {
+    stopSimPacing();
     if (activeRun === null || activeRun.rounds.length === 0) return;
     if (selectedRound === "all") {
       setSelectedRound(0);
@@ -526,15 +624,64 @@ export function SimShopArena({
         </div>
       </Panel>
 
-      {activeRun === null ? (
+      {displayedRun === null ? (
         <Panel className="border-dashed bg-paper-50/70 p-6 text-center text-[13px] text-ink-500">
           先选择上方剧本（推荐先试「supplycut 断供」或「pricewar 价格战」）与策略画像，点击「一键启动 8 回合博弈」查看完整编排状态机、议价走势、边际仲裁与不可逆哈希账本。
         </Panel>
       ) : (
         <>
-          {activeRun.sourceContextNote === null ? null : (
+          {pacingActive && pacingRoundIndex !== null && pacingStageIndex !== null && activeRun !== null ? (
+            <section
+              data-testid="simshop-live-pacing"
+              className="rounded-2xl border-2 border-jade-500/45 bg-ink-900 p-3.5 text-paper-50 shadow-card sm:p-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Cpu className="h-4 w-4 text-jade-100 animate-pulse" />
+                  <span className="font-display text-[14px] font-semibold">
+                    动态市场多 Agent 推演中：第 {pacingRoundIndex + 1} / {activeRun.rounds.length} 回合
+                  </span>
+                  <Pill tone="ochre">
+                    {WORKFLOW_PIPELINE_STEPS[pacingStageIndex]?.label ?? "执行中"}
+                  </Pill>
+                </div>
+                <button
+                  type="button"
+                  data-testid="simshop-skip-pacing"
+                  onClick={stopSimPacing}
+                  className="inline-flex items-center gap-1 rounded-lg bg-paper-50/15 px-2.5 py-1 text-[11px] font-medium text-paper-50 ring-1 ring-inset ring-paper-50/25 hover:bg-paper-50/25"
+                >
+                  <FastForward className="h-3.5 w-3.5" />
+                  跳过演播直达终局
+                </button>
+              </div>
+              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-paper-50/15">
+                <div
+                  className="h-full rounded-full bg-jade-100 transition-all duration-100"
+                  style={{
+                    width: `${String(
+                      Math.min(
+                        100,
+                        Math.round(
+                          (((simPacingStep ?? 0) + 1) /
+                            Math.max(1, activeRun.rounds.length * WORKFLOW_PIPELINE_STEPS.length)) *
+                            100,
+                        ),
+                      ),
+                    )}%`,
+                  }}
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] text-paper-300">
+                当前阶段：{WORKFLOW_PIPELINE_STEPS[pacingStageIndex]?.desc ?? "市场模拟结算"} · 已完成{" "}
+                {displayedRun.rounds.length} 个不可逆封存回合
+              </p>
+            </section>
+          ) : null}
+
+          {displayedRun.sourceContextNote === null ? null : (
             <div className="rounded-xl border border-paper-300 bg-paper-50 px-3.5 py-2 text-[12px] text-ink-700">
-              {activeRun.sourceContextNote}
+              {displayedRun.sourceContextNote}
             </div>
           )}
 
@@ -543,69 +690,75 @@ export function SimShopArena({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-display text-[16px] font-semibold">
-                    {activeRun.scenarioInfo.title}
+                    {displayedRun.scenarioInfo.title}
                   </span>
                   <span className="rounded bg-paper-50/15 px-2 py-0.5 font-mono text-[11px] text-paper-100">
-                    {activeRun.meta.runId}
+                    {displayedRun.meta.runId}
                   </span>
                 </div>
                 <p className="mt-0.5 text-[11.5px] text-paper-300">
-                  画像 {activeRun.meta.profile} · 种子 {activeRun.meta.seed} · 总调用 {activeRun.totals.totalCalls} 次 · 议价报价 {activeRun.totals.totalQuotes} 条（成交 {activeRun.totals.acceptedQuotes}）
+                  画像 {displayedRun.meta.profile} · 种子 {displayedRun.meta.seed} · 总调用 {displayedRun.totals.totalCalls} 次 · 议价报价 {displayedRun.totals.totalQuotes} 条（成交 {displayedRun.totals.acceptedQuotes}）
                 </p>
               </div>
               <div className="text-right font-mono text-[11px] text-paper-300">
-                <div>最终链指纹：{shortHash(activeRun.ledger.finalHash, 14)}</div>
-                <div>{activeRun.meta.replayVerified ? "SQLite 镜像重放校验通过" : "待核验"}</div>
+                <div>
+                  {pacingActive
+                    ? `推演中（第 ${String(displayedRun.rounds.length)} / ${String(activeRun?.rounds.length ?? 8)} 回合）`
+                    : `最终链指纹：${shortHash(displayedRun.ledger.finalHash, 14)}`}
+                </div>
+                <div>{displayedRun.meta.replayVerified ? "SQLite 镜像重放校验通过" : "待核验"}</div>
               </div>
             </div>
 
             <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
               <div>
-                <dt className="text-[11px] text-paper-300">8 回合累计净利</dt>
+                <dt className="text-[11px] text-paper-300">
+                  {pacingActive ? `前 ${String(displayedRun.rounds.length)} 回合净利` : "8 回合累计净利"}
+                </dt>
                 <dd
                   data-testid="simshop-total-profit"
                   className={cn(
                     "mt-0.5 font-display text-[20px] font-semibold tabular",
-                    activeRun.totals.totalProfit >= 0 ? "text-jade-100" : "text-seal-100",
+                    displayedRun.totals.totalProfit >= 0 ? "text-jade-100" : "text-seal-100",
                   )}
                 >
-                  {formatCentsSigned(activeRun.totals.totalProfit)}
+                  {formatCentsSigned(displayedRun.totals.totalProfit)}
                 </dd>
               </div>
               <div>
                 <dt className="text-[11px] text-paper-300">期末可用现金</dt>
                 <dd className="mt-0.5 font-display text-[20px] font-semibold tabular">
-                  {money(activeRun.totals.finalCash)}
+                  {money(displayedRun.totals.finalCash)}
                 </dd>
               </div>
               <div>
                 <dt className="text-[11px] text-paper-300">期末声誉 / 缺货</dt>
                 <dd className="mt-0.5 font-display text-[20px] font-semibold tabular">
-                  {activeRun.totals.finalReputation}{" "}
+                  {displayedRun.totals.finalReputation}{" "}
                   <span className="text-[12px] font-normal text-paper-300">
-                    / 缺 {activeRun.totals.totalMissed} 件
+                    / 缺 {displayedRun.totals.totalMissed} 件
                   </span>
                 </dd>
               </div>
               <div>
                 <dt className="text-[11px] text-paper-300">断供议价成交</dt>
                 <dd className="mt-0.5 font-display text-[20px] font-semibold tabular">
-                  {activeRun.totals.acceptedQuotes} / {activeRun.totals.totalQuotes}
+                  {displayedRun.totals.acceptedQuotes} / {displayedRun.totals.totalQuotes}
                 </dd>
               </div>
               <div>
                 <dt className="text-[11px] text-paper-300">价格战仲裁 / 兜底</dt>
                 <dd className="mt-0.5 font-display text-[20px] font-semibold tabular">
-                  {activeRun.totals.priceWarCount} 次{" "}
+                  {displayedRun.totals.priceWarCount} 次{" "}
                   <span className="text-[12px] font-normal text-paper-300">
-                    / 兜底 {activeRun.totals.fallbackRounds} 回合
+                    / 兜底 {displayedRun.totals.fallbackRounds} 回合
                   </span>
                 </dd>
               </div>
               <div>
                 <dt className="text-[11px] text-paper-300">版本热升级</dt>
                 <dd className="mt-0.5 font-display text-[20px] font-semibold tabular">
-                  {activeRun.totals.versionUpgradeCount} 次
+                  {displayedRun.totals.versionUpgradeCount} 次
                 </dd>
               </div>
             </dl>
@@ -617,7 +770,10 @@ export function SimShopArena({
                 <button
                   type="button"
                   data-testid="simshop-round-all"
-                  onClick={() => setSelectedRound("all")}
+                  onClick={() => {
+                    stopSimPacing();
+                    setSelectedRound("all");
+                  }}
                   className={cn(
                     "rounded-lg px-2.5 py-1 text-[11.5px] font-semibold ring-1 ring-inset transition-colors",
                     selectedRound === "all"
@@ -625,7 +781,7 @@ export function SimShopArena({
                       : "bg-paper-100 text-ink-700 ring-paper-300 hover:bg-paper-150",
                   )}
                 >
-                  全部展开 (8 回合)
+                  全部展开 ({displayedRun.rounds.length} 回合)
                 </button>
                 <button
                   type="button"
@@ -638,7 +794,7 @@ export function SimShopArena({
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </button>
                 <div className="flex flex-wrap items-center gap-1">
-                  {activeRun.rounds.map((r) => {
+                  {displayedRun.rounds.map((r) => {
                     const isSelected = selectedRound === r.round;
                     const tag = r.supplyTriggered
                       ? "断供"
@@ -652,7 +808,10 @@ export function SimShopArena({
                         key={r.round}
                         type="button"
                         data-testid={`simshop-round-tab-${String(r.round)}`}
-                        onClick={() => setSelectedRound(r.round)}
+                        onClick={() => {
+                          stopSimPacing();
+                          setSelectedRound(r.round);
+                        }}
                         className={cn(
                           "inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors",
                           isSelected
@@ -679,7 +838,7 @@ export function SimShopArena({
                   type="button"
                   data-testid="simshop-round-next"
                   onClick={stepNext}
-                  disabled={selectedRound === activeRun.rounds.length - 1}
+                  disabled={selectedRound === (activeRun?.rounds.length ?? displayedRun.rounds.length) - 1}
                   aria-label="下一回合"
                   className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-paper-100 text-ink-700 ring-1 ring-inset ring-paper-300 hover:bg-paper-150 disabled:opacity-40"
                 >
@@ -687,7 +846,7 @@ export function SimShopArena({
                 </button>
               </div>
               <div className="text-[11px] text-ink-500">
-                当前视图：{selectedRound === "all" ? "全 8 回合总览" : `第 ${String(selectedRound + 1)} 回合单步精查`}
+                当前视图：{selectedRound === "all" ? `全 ${String(displayedRun.rounds.length)} 回合总览` : `第 ${String(selectedRound + 1)} 回合单步精查`}
               </div>
             </div>
           </Panel>
@@ -695,12 +854,12 @@ export function SimShopArena({
           <Panel data-testid="simshop-orchestration-panel">
             <PanelHead
               title="一、回合编排状态机与 Agent 动态版本热升级轨"
-              desc={activeRun.meta.orchestrationNote}
+              desc={displayedRun.meta.orchestrationNote}
               right={
                 <div className="flex flex-wrap items-center gap-1.5">
                   <Pill tone="jade">
                     <Cpu className="h-3 w-3" />
-                    热升级 {activeRun.versionUpgrades.length} 次
+                    热升级 {displayedRun.versionUpgrades.length} 次
                   </Pill>
                 </div>
               }
@@ -708,15 +867,26 @@ export function SimShopArena({
 
             <div className="flex flex-col gap-3.5 p-3.5 sm:p-5">
               <div className="grid gap-1.5 sm:grid-cols-4 lg:grid-cols-7">
-                {WORKFLOW_PIPELINE_STEPS.map((step) => (
-                  <div
-                    key={step.id}
-                    className="rounded-xl border border-paper-300/80 bg-paper-100/60 px-2.5 py-2"
-                  >
-                    <div className="text-[11px] font-semibold text-ink-900">{step.label}</div>
-                    <div className="mt-0.5 text-[10px] leading-snug text-ink-500">{step.desc}</div>
-                  </div>
-                ))}
+                {WORKFLOW_PIPELINE_STEPS.map((step, idx) => {
+                  const isCurrentStage = pacingStageIndex === idx;
+                  const isDoneStage = pacingStageIndex !== null && idx < pacingStageIndex;
+                  return (
+                    <div
+                      key={step.id}
+                      className={cn(
+                        "rounded-xl border px-2.5 py-2 transition-colors",
+                        isCurrentStage
+                          ? "border-seal-500 bg-seal-100/50 ring-1 ring-seal-500/40"
+                          : isDoneStage
+                            ? "border-jade-500/40 bg-jade-100/35"
+                            : "border-paper-300/80 bg-paper-100/60",
+                      )}
+                    >
+                      <div className="text-[11px] font-semibold text-ink-900">{step.label}</div>
+                      <div className="mt-0.5 text-[10px] leading-snug text-ink-500">{step.desc}</div>
+                    </div>
+                  );
+                })}
               </div>
 
               <div
@@ -728,20 +898,22 @@ export function SimShopArena({
                     <GitBranch className="h-4 w-4 text-jade-600" />
                     <span>Agent 动态版本热升级轨迹</span>
                   </div>
-                  <Pill tone={activeRun.versionUpgrades.length > 0 ? "jade" : "ink"}>
-                    {activeRun.versionUpgrades.length > 0
-                      ? `已热升级 ${String(activeRun.versionUpgrades.length)} 项`
+                  <Pill tone={displayedRun.versionUpgrades.length > 0 ? "jade" : "ink"}>
+                    {displayedRun.versionUpgrades.length > 0
+                      ? `已热升级 ${String(displayedRun.versionUpgrades.length)} 项`
                       : "未触发版本变更"}
                   </Pill>
                 </div>
 
-                {activeRun.versionUpgrades.length === 0 ? (
+                {displayedRun.versionUpgrades.length === 0 ? (
                   <p className="mt-2 text-[12px] text-ink-500">
-                    本次运行未记录到版本跃迁（可能因首轮即走规则兜底跳过复盘）。
+                    {pacingActive
+                      ? "正在推演第 1 回合结算与跨回合复盘节点，即将生成策略热升级补丁…"
+                      : "本次运行未记录到版本跃迁（可能因首轮即走规则兜底跳过复盘）。"}
                   </p>
                 ) : (
                   <div className="mt-2.5 flex flex-col gap-2">
-                    {activeRun.versionUpgrades.map((up) => (
+                    {displayedRun.versionUpgrades.map((up) => (
                       <div
                         key={`${up.agentId}-${String(up.seq)}`}
                         className="flex flex-col gap-1 rounded-xl border border-jade-500/35 bg-jade-100/40 px-3 py-2.5 text-[12px]"
@@ -1154,9 +1326,9 @@ export function SimShopArena({
               desc="每回合结算均串联上一回合哈希（prevHash → hash）。点击任一回合「尝试重做/篡改」将真实请求 POST /api/simshop/runs/:runId/rounds/:round/commit，验证服务端 409 round-locked 拒绝边界。"
               right={
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Pill tone={activeRun.ledger.matchesRunHash ? "jade" : "seal"}>
+                  <Pill tone={displayedRun.ledger.matchesRunHash ? "jade" : "seal"}>
                     <Lock className="h-3 w-3" />
-                    {activeRun.ledger.matchesRunHash ? "哈希链完整封存" : "哈希链不一致"}
+                    {displayedRun.ledger.matchesRunHash ? "哈希链完整封存" : "哈希链不一致"}
                   </Pill>
                 </div>
               }
@@ -1220,7 +1392,7 @@ export function SimShopArena({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-paper-200">
-                    {activeRun.ledger.rounds.map((row) => {
+                    {displayedRun.ledger.rounds.map((row) => {
                       const highlighted = selectedRound === row.round;
                       return (
                         <tr
@@ -1296,10 +1468,10 @@ export function SimShopArena({
                 </summary>
                 <div className="mt-1.5 space-y-1 font-mono text-[10.5px] break-all">
                   <div>
-                    finalHash: <span className="select-all text-ink-900">{activeRun.ledger.finalHash}</span>
+                    finalHash: <span className="select-all text-ink-900">{displayedRun.ledger.finalHash}</span>
                   </div>
                   <div>
-                    ledgerHash: <span className="select-all text-ink-900">{activeRun.ledger.ledgerHash}</span>
+                    ledgerHash: <span className="select-all text-ink-900">{displayedRun.ledger.ledgerHash}</span>
                   </div>
                 </div>
               </details>

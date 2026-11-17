@@ -15,7 +15,7 @@ export function ModelSettingsPanel({
   const [view, setView] = useState<LlmSettingsView | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
-  const [model, setModel] = useState("deepseek-flash");
+  const [model, setModel] = useState("deepseek-chat");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ readonly ok: boolean; readonly text: string } | null>(null);
@@ -109,7 +109,7 @@ export function ModelSettingsPanel({
       <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
         <div className="sm:col-span-2"><Toggle label="启用模型会审、提问和文案" hint="采购、定价与运营独立提案，主持质询后定向修订；数值和风控仍由本地验证。" checked={enabled} onChange={setEnabled} /></div>
         <Field label="Base URL" hint="DeepSeek 官方地址" value={baseUrl} inputMode="text" onChange={setBaseUrl} placeholder="https://api.deepseek.com" />
-        <Field label="模型名" hint="DeepSeek Flash" value={model} inputMode="text" onChange={setModel} placeholder="deepseek-flash" />
+        <Field label="模型名" hint="DeepSeek Chat" value={model} inputMode="text" onChange={setModel} placeholder="deepseek-chat" />
         <Field label="API Key" hint={view?.hasKey === true ? `已有 ${view.keyHint}，留空则不变` : "本地模型可填 local"} value={apiKey} inputMode="text" onChange={setApiKey} placeholder="sk-…" />
         <div className="flex flex-wrap items-end gap-2">
           <ActionButton size="sm" onClick={() => { void persist(); }} disabled={busy}><Save className="h-3.5 w-3.5" />保存</ActionButton>

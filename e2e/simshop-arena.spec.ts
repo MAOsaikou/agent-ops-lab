@@ -156,4 +156,46 @@ test.describe("SimShop 8回合博弈沙盘与多Agent评测竞技场", () => {
 
     expect(pageErrors).toEqual([]);
   });
+
+  test("评委演播推演模式：三大视图均展示多Agent实时编排追踪与一键跳过直达终局", async ({
+    page,
+  }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (err) => pageErrors.push(err.message));
+
+    await page.goto("/");
+    const toggle = page.getByTestId("pacing-toggle");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(toggle).toContainText("演播推演");
+
+    // 1. 单品会签台演播推演与跳过
+    await page.getByTestId("scenario-1").click();
+    await page.getByTestId("run-button").click();
+    await expect(page.getByTestId("live-orchestration-tracker")).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId("skip-pacing-button").click();
+    await expect(page.getByTestId("status")).toHaveAttribute("data-status", "awaiting-approval", {
+      timeout: 15_000,
+    });
+
+    // 2. 8 回合博弈沙盘演播推演与跳过
+    await page.getByTestId("nav-tab-simshop").click();
+    await page.getByTestId("simshop-scenario-supplycut").click();
+    await page.getByTestId("simshop-start-button").click();
+    await expect(page.getByTestId("simshop-live-pacing")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("simshop-skip-pacing").click();
+    await expect(page.getByTestId("simshop-total-profit")).toContainText("+¥641.40");
+
+    // 3. 多拓扑竞技场演播推演与跳过
+    await page.getByTestId("nav-tab-arena").click();
+    await page.getByTestId("arena-run-eval-button").click();
+    await expect(page.getByTestId("arena-live-pacing")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("arena-skip-pacing").click();
+    await expect(page.getByTestId("arena-part-a-card-collab-with-review")).toContainText(
+      "12/12 (100.0%)",
+    );
+
+    expect(pageErrors).toEqual([]);
+  });
 });

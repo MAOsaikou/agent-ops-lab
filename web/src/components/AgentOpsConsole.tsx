@@ -6,7 +6,9 @@ import {
   Bot,
   CheckCircle2,
   Clock3,
+  FastForward,
   FileSpreadsheet,
+  Film,
   Gavel,
   History,
   Layers3,
@@ -19,6 +21,7 @@ import {
   Swords,
   Trophy,
   XCircle,
+  Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -56,6 +59,7 @@ import {
 } from "../lib/agentops.js";
 import { cn } from "../lib/cn.js";
 import { money, moneyInt, num, pct, shortHash } from "../lib/format.js";
+import { defaultPacingEnabled, eventStepIntervalMs } from "../lib/pacing.js";
 import { CandidateCard } from "./CandidateCard.js";
 import { ChecksList } from "./ChecksList.js";
 import { CollaborationEvidence } from "./CollaborationEvidence.js";
@@ -294,6 +298,30 @@ function llmBadgeMeta(
       "未接外部模型，按本地规则核算，不会假装是模型在推理。",
   };
 }
+
+const REVIEW_PIPELINE_STAGES: readonly {
+  readonly id: string;
+  readonly label: string;
+  readonly matches: (event: RunEvent) => boolean;
+}[] = [
+  { id: "plan", label: "规划拆分", matches: (e) => e.nodeId === "plan" },
+  { id: "research", label: "证据提取", matches: (e) => e.nodeId === "research" },
+  { id: "account", label: "成本会计", matches: (e) => e.nodeId === "account" },
+  { id: "market", label: "市场报价", matches: (e) => e.nodeId === "market" },
+  {
+    id: "challenge",
+    label: "三方质询",
+    matches: (e) => e.nodeId === "challenge" || (e.nodeId?.startsWith("challenge-") ?? false),
+  },
+  { id: "risk", label: "风控复核", matches: (e) => e.nodeId === "risk" },
+  {
+    id: "adjust-loop",
+    label: "经济修正",
+    matches: (e) => e.nodeId === "adjust-loop" || e.type === "loop.adjusted",
+  },
+  { id: "copy", label: "生成文案", matches: (e) => e.nodeId === "copy" },
+  { id: "approval", label: "掌柜拍板", matches: (e) => e.nodeId === "approval" },
+];
 
 function CredentialLine({
   events,
@@ -638,13 +666,100 @@ export function AgentOpsConsole(): React.JSX.Element {
   const historyBackRef = useRef<HTMLButtonElement | null>(null);
   const [replayCount, setReplayCount] = useState<number | null>(null);
   const [replayAnimating, setReplayAnimating] = useState<boolean>(false);
+  const [pacingEnabled, setPacingEnabled] = useState<boolean>(defaultPacingEnabled);
+  const [pacingActive, setPacingActive] = useState<boolean>(false);
+  const [pacingTotal, setPacingTotal] = useState<number>(0);
+  const pacingEnabledRef = useRef<boolean>(pacingEnabled);
+  pacingEnabledRef.current = pacingEnabled;
+  const pacingTimerRef = useRef<number | null>(null);
+  const pacingQueueRef = useRef<RunEvent[]>([]);
+  const pacingCursorRef = useRef<number>(0);
+  const pacingSnapshotRef = useRef<AgentRun | null>(null);
+  const pacingFinalRunRef = useRef<AgentRun | null>(null);
+  const pacingOpIdRef = useRef<number>(0);
   const rafRef = useRef<number | null>(null);
   const opSeqRef = useRef<number>(0);
   const abortRef = useRef<AbortController | null>(null);
   const decisionInFlightRef = useRef<boolean>(false);
 
+  const clearPacing = (): void => {
+    if (pacingTimerRef.current !== null) {
+      window.clearInterval(pacingTimerRef.current);
+      pacingTimerRef.current = null;
+    }
+    pacingQueueRef.current = [];
+    pacingCursorRef.current = 0;
+    pacingSnapshotRef.current = null;
+    pacingFinalRunRef.current = null;
+    setPacingActive(false);
+    setPacingTotal(0);
+  };
+
+  const finishPacing = (finalRun: AgentRun, opId: number): void => {
+    if (opSeqRef.current !== opId) return;
+    clearPacing();
+    setRun(finalRun);
+    setStreamEvents(finalRun.events);
+    setBusy(false);
+    void fetchAgentRuns()
+      .then((latestRuns) => {
+        if (opSeqRef.current === opId) {
+          setRuns(latestRuns);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const schedulePacingLoop = (opId: number, stepMs: number): void => {
+    if (pacingTimerRef.current !== null) {
+      window.clearInterval(pacingTimerRef.current);
+    }
+    pacingTimerRef.current = window.setInterval(() => {
+      if (opSeqRef.current !== opId) {
+        clearPacing();
+        return;
+      }
+      const queue = pacingQueueRef.current;
+      if (pacingCursorRef.current < queue.length) {
+        pacingCursorRef.current += 1;
+        const revealed = queue.slice(0, pacingCursorRef.current);
+        setStreamEvents(revealed);
+        const snap = pacingSnapshotRef.current;
+        if (
+          snap !== null &&
+          pacingFinalRunRef.current === null &&
+          pacingCursorRef.current >= Math.min(snap.events.length, queue.length)
+        ) {
+          setRun(snap);
+        }
+      }
+      const finalRun = pacingFinalRunRef.current;
+      if (finalRun !== null && pacingCursorRef.current >= queue.length) {
+        finishPacing(finalRun, opId);
+      }
+    }, stepMs);
+  };
+
+  const handleSkipPacing = (): void => {
+    const finalRun = pacingFinalRunRef.current;
+    if (finalRun !== null) {
+      finishPacing(finalRun, pacingOpIdRef.current);
+      return;
+    }
+    if (pacingTimerRef.current !== null) {
+      window.clearInterval(pacingTimerRef.current);
+      pacingTimerRef.current = null;
+    }
+    setStreamEvents([...pacingQueueRef.current]);
+    if (pacingSnapshotRef.current !== null) {
+      setRun(pacingSnapshotRef.current);
+    }
+    setPacingActive(false);
+  };
+
   const beginOperation = (): { readonly opId: number; readonly signal: AbortSignal } => {
     abortRef.current?.abort();
+    clearPacing();
     const controller = new AbortController();
     abortRef.current = controller;
     opSeqRef.current += 1;
@@ -655,6 +770,10 @@ export function AgentOpsConsole(): React.JSX.Element {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      if (pacingTimerRef.current !== null) {
+        window.clearInterval(pacingTimerRef.current);
+        pacingTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -778,21 +897,60 @@ export function AgentOpsConsole(): React.JSX.Element {
     setStreamEvents([]);
     setRun(null);
 
+    const usePacing = pacingEnabledRef.current;
+    let handedOffToPacing = false;
+    if (usePacing) {
+      pacingOpIdRef.current = opId;
+      setPacingActive(true);
+      setPacingTotal(0);
+      schedulePacingLoop(opId, 130);
+    }
+
     try {
       const autoApprove = !requireApproval;
       const completedOrPaused = await streamAgentTask(
         { task: taskToRun, autoApprove },
         (incomingEvent) => {
           if (opSeqRef.current !== opId) return;
+          if (usePacing && pacingTimerRef.current !== null) {
+            if (!pacingQueueRef.current.some((e) => e.seq === incomingEvent.seq)) {
+              pacingQueueRef.current = [...pacingQueueRef.current, incomingEvent];
+              setPacingTotal(pacingQueueRef.current.length);
+            }
+            return;
+          }
           setStreamEvents((prev) => [...prev, incomingEvent]);
         },
         (snapshot) => {
           if (opSeqRef.current !== opId) return;
+          if (usePacing && pacingTimerRef.current !== null) {
+            pacingSnapshotRef.current = snapshot;
+            return;
+          }
           setRun(snapshot);
         },
         signal,
       );
       if (opSeqRef.current !== opId) return;
+      if (usePacing && pacingTimerRef.current !== null) {
+        const merged = [...pacingQueueRef.current];
+        for (const ev of completedOrPaused.events) {
+          if (!merged.some((item) => item.seq === ev.seq)) {
+            merged.push(ev);
+          }
+        }
+        merged.sort((a, b) => a.seq - b.seq);
+        pacingQueueRef.current = merged;
+        pacingFinalRunRef.current = completedOrPaused;
+        setPacingTotal(merged.length);
+        if (pacingCursorRef.current >= merged.length) {
+          finishPacing(completedOrPaused, opId);
+        } else {
+          handedOffToPacing = true;
+          schedulePacingLoop(opId, eventStepIntervalMs(merged.length, 4600));
+        }
+        return;
+      }
       setRun(completedOrPaused);
       setStreamEvents(completedOrPaused.events);
       const latestRuns = await fetchAgentRuns().catch(() => []);
@@ -801,6 +959,7 @@ export function AgentOpsConsole(): React.JSX.Element {
       }
     } catch (caught) {
       if (opSeqRef.current !== opId) return;
+      clearPacing();
       setRun(null);
       setStreamEvents([]);
       setSelectedCandidateId(null);
@@ -810,7 +969,7 @@ export function AgentOpsConsole(): React.JSX.Element {
       setReplayAnimating(false);
       setError(caught instanceof Error ? caught.message : "上架评审运行失败");
     } finally {
-      if (opSeqRef.current === opId) {
+      if (opSeqRef.current === opId && !handedOffToPacing) {
         setBusy(false);
       }
     }
@@ -1079,6 +1238,26 @@ export function AgentOpsConsole(): React.JSX.Element {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            data-testid="pacing-toggle"
+            aria-pressed={pacingEnabled}
+            onClick={() => setPacingEnabled((prev) => !prev)}
+            title={
+              pacingEnabled
+                ? "当前为演播推演模式：逐步展示各 Agent 调度、工具调用、质询与修正过程；点击切为极速直出"
+                : "当前为极速直出模式：跳过演示步进动画直接出结果；点击开启演播推演"
+            }
+            className={cn(
+              "inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-[11px] font-medium ring-1 ring-inset transition-colors sm:px-3 sm:py-1.5 sm:text-[12px]",
+              pacingEnabled
+                ? "bg-jade-100/80 text-jade-600 ring-jade-500/35 hover:bg-jade-100"
+                : "bg-paper-100 text-ink-700 ring-paper-300 hover:bg-paper-150",
+            )}
+          >
+            {pacingEnabled ? <Film className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
+            <span>{pacingEnabled ? "演播推演" : "极速直出"}</span>
+          </button>
           <span data-testid="llm-mode-badge">
             <Pill tone={llmMeta.tone}>{llmMeta.label}</Pill>
           </span>
@@ -1455,6 +1634,90 @@ export function AgentOpsConsole(): React.JSX.Element {
 
       <div className="order-1 grid gap-2.5 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-2.5 sm:gap-4">
+          {busy ? (() => {
+            const latestEvent = streamEvents.at(-1) ?? null;
+            const latestAgentName =
+              latestEvent?.agentId
+                ? (catalog?.agents.find((a) => a.id === latestEvent.agentId)?.name ??
+                  prettyRole(latestEvent.agentId))
+                : "协调调度器";
+            const latestMeta = latestEvent ? prettyEventTitle(latestEvent, catalog) : null;
+            const totalSteps = Math.max(pacingTotal, streamEvents.length, 1);
+            const pctValue = Math.min(100, Math.round((streamEvents.length / totalSteps) * 100));
+            return (
+              <section
+                data-testid="live-orchestration-tracker"
+                className="rounded-2xl border-2 border-jade-500/45 bg-ink-900 p-3.5 text-paper-50 shadow-card sm:p-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Bot className="h-4 w-4 text-jade-100 animate-pulse" />
+                    <span className="font-display text-[14px] font-semibold">
+                      多智能体实时编排推演中
+                    </span>
+                    <Pill tone="jade">
+                      {streamEvents.length} / {pacingTotal > 0 ? pacingTotal : "…"} 步
+                    </Pill>
+                  </div>
+                  {pacingActive ? (
+                    <button
+                      type="button"
+                      data-testid="skip-pacing-button"
+                      onClick={handleSkipPacing}
+                      className="inline-flex items-center gap-1 rounded-lg bg-paper-50/15 px-2.5 py-1 text-[11px] font-medium text-paper-50 ring-1 ring-inset ring-paper-50/25 transition-colors hover:bg-paper-50/25"
+                    >
+                      <FastForward className="h-3.5 w-3.5" />
+                      跳过演播直达结果
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-paper-50/15">
+                  <div
+                    className="h-full rounded-full bg-jade-100 transition-all duration-150"
+                    style={{ width: `${String(pacingTotal > 0 ? pctValue : 15)}%` }}
+                  />
+                </div>
+
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  {REVIEW_PIPELINE_STAGES.map((stage, idx) => {
+                    const hit = streamEvents.some(stage.matches);
+                    const isCurrent = latestEvent ? stage.matches(latestEvent) : idx === 0;
+                    return (
+                      <span
+                        key={stage.id}
+                        className={cn(
+                          "rounded-md px-2 py-0.5 text-[10.5px] font-medium transition-colors",
+                          isCurrent
+                            ? "bg-seal-500 text-paper-50 ring-1 ring-seal-100"
+                            : hit
+                              ? "bg-jade-600/80 text-paper-50"
+                              : "bg-paper-50/10 text-paper-300",
+                        )}
+                      >
+                        {stage.label}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-2.5 rounded-xl bg-paper-50/10 px-3 py-2 text-[11.5px]">
+                  <div className="flex flex-wrap items-center gap-1.5 font-medium text-paper-50">
+                    <span className="rounded bg-jade-600 px-1.5 py-0.5 text-[10px]">
+                      {latestAgentName}
+                    </span>
+                    <span>{latestMeta?.title ?? "正在初始化工作流与调度器…"}</span>
+                  </div>
+                  {latestEvent?.detail ? (
+                    <p className="mt-1 line-clamp-2 text-[11px] text-paper-300">
+                      {latestEvent.detail}
+                    </p>
+                  ) : null}
+                </div>
+              </section>
+            );
+          })() : null}
+
           <Panel data-testid="three-strategies">
             <PanelHead
               title={
@@ -2509,9 +2772,10 @@ export function AgentOpsConsole(): React.JSX.Element {
         <SimShopArena
           sourceProduct={simShopSourceProduct}
           onClearSourceProduct={() => setSimShopSourceProduct(null)}
+          pacingEnabled={pacingEnabled}
         />
       ) : (
-        <TopologyBenchmarkView />
+        <TopologyBenchmarkView pacingEnabled={pacingEnabled} />
       )}
     </div>
   );

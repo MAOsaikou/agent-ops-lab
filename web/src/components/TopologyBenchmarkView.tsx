@@ -4,13 +4,14 @@ import {
   Award,
   BarChart3,
   CheckCircle2,
+  FastForward,
   GitCompare,
   Play,
   RefreshCw,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -100,7 +101,11 @@ function signedMoneyFromCents(centsValue: number): string {
   return `${prefix}${money(centsValue)}`;
 }
 
-export function TopologyBenchmarkView(): React.JSX.Element {
+export function TopologyBenchmarkView({
+  pacingEnabled = false,
+}: {
+  readonly pacingEnabled?: boolean;
+}): React.JSX.Element {
   const [evalResult, setEvalResult] = useState<AgentOpsEvalResponse | null>(null);
   const [campaignResult, setCampaignResult] = useState<SimShopCompareResponse | null>(null);
   const [campaignScenarioScope, setCampaignScenarioScope] = useState<"all" | SimShopScenarioName>("all");
@@ -113,6 +118,45 @@ export function TopologyBenchmarkView(): React.JSX.Element {
   const [busyBoth, setBusyBoth] = useState<boolean>(false);
   const [busyCampaign, setBusyCampaign] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanCount, setScanCount] = useState<number | null>(null);
+  const scanTimerRef = useRef<number | null>(null);
+
+  const stopScan = (): void => {
+    if (scanTimerRef.current !== null) {
+      window.clearInterval(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
+    setScanCount(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (scanTimerRef.current !== null) {
+        window.clearInterval(scanTimerRef.current);
+        scanTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const startTopologyScan = (): void => {
+    stopScan();
+    if (!pacingEnabled) return;
+    let step = 1;
+    setScanCount(1);
+    scanTimerRef.current = window.setInterval(() => {
+      step += 1;
+      if (step >= ALL_EVAL_TOPOLOGIES.length) {
+        stopScan();
+        return;
+      }
+      setScanCount(step);
+    }, 850);
+  };
+
+  const revealedTopologies = useMemo(() => {
+    if (scanCount === null) return new Set<EvalTopologyName>(ALL_EVAL_TOPOLOGIES);
+    return new Set<EvalTopologyName>(ALL_EVAL_TOPOLOGIES.slice(0, scanCount));
+  }, [scanCount]);
 
   const parseSeed = (): number | null => {
     const numVal = Number(campaignSeedInput.trim());
@@ -127,6 +171,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
     if (busyBoth || busyCampaign) return;
     const seed = parseSeed();
     if (seed === null) return;
+    stopScan();
     setBusyBoth(true);
     setError(null);
 
@@ -144,6 +189,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
       if (compareRes.scenarios.length > 0 && !compareRes.scenarios.includes(chartScenario)) {
         setChartScenario(compareRes.scenarios[0]!);
       }
+      startTopologyScan();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "运行双基准评测失败");
     } finally {
@@ -155,6 +201,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
     if (busyBoth || busyCampaign) return;
     const seed = parseSeed();
     if (seed === null) return;
+    stopScan();
     setBusyCampaign(true);
     setError(null);
 
@@ -168,6 +215,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
       if (compareRes.scenarios.length > 0 && !compareRes.scenarios.includes(chartScenario)) {
         setChartScenario(compareRes.scenarios[0]!);
       }
+      startTopologyScan();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "刷新 8 回合博弈对比失败");
     } finally {
@@ -177,7 +225,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
 
   const partAChartData = useMemo(() => {
     if (evalResult === null) return [];
-    return ALL_EVAL_TOPOLOGIES.map((topology) => {
+    return ALL_EVAL_TOPOLOGIES.filter((topology) => revealedTopologies.has(topology)).map((topology) => {
       const stat = evalResult.topologyStats[topology];
       const metrics = evalResult.summary[topology];
       return {
@@ -188,7 +236,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
         missedPct: metrics ? Number((metrics.missedRiskRate * 100).toFixed(1)) : 0,
       };
     });
-  }, [evalResult]);
+  }, [evalResult, revealedTopologies]);
 
   const filteredCases = useMemo(() => {
     if (evalResult === null) return [];
@@ -335,6 +383,40 @@ export function TopologyBenchmarkView(): React.JSX.Element {
         </div>
       </Panel>
 
+      {scanCount !== null ? (
+        <section
+          data-testid="arena-live-pacing"
+          className="rounded-2xl border-2 border-jade-500/45 bg-ink-900 p-3.5 text-paper-50 shadow-card sm:p-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Activity className="h-4 w-4 text-jade-100 animate-pulse" />
+              <span className="font-display text-[14px] font-semibold">
+                多拓扑对比评测扫描中：{scanCount} / {ALL_EVAL_TOPOLOGIES.length}
+              </span>
+              <Pill tone="ochre">
+                {TOPOLOGY_META[ALL_EVAL_TOPOLOGIES[scanCount - 1] ?? "rule"].shortLabel}
+              </Pill>
+            </div>
+            <button
+              type="button"
+              data-testid="arena-skip-pacing"
+              onClick={stopScan}
+              className="inline-flex items-center gap-1 rounded-lg bg-paper-50/15 px-2.5 py-1 text-[11px] font-medium text-paper-50 ring-1 ring-inset ring-paper-50/25 hover:bg-paper-50/25"
+            >
+              <FastForward className="h-3.5 w-3.5" />
+              跳过演播直出全部
+            </button>
+          </div>
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-paper-50/15">
+            <div
+              className="h-full rounded-full bg-jade-100 transition-all duration-200"
+              style={{ width: `${String(Math.round((scanCount / ALL_EVAL_TOPOLOGIES.length) * 100))}%` }}
+            />
+          </div>
+        </section>
+      ) : null}
+
       {evalResult === null && campaignResult === null ? (
         <Panel className="border-dashed bg-paper-50/70 p-6 text-center text-[13px] text-ink-500">
           点击「一键拉取双基准对比」，实时跑通 12 案冻结上架会签基准（Part A）与 8 回合 SimShop 动态市场博弈对照（Part B），展示四拓扑得分、通过率差异与逐案归因证据。
@@ -359,7 +441,24 @@ export function TopologyBenchmarkView(): React.JSX.Element {
                 const stat = evalResult.topologyStats[topology];
                 const metrics = evalResult.summary[topology];
                 const meta = TOPOLOGY_META[topology];
+                const revealed = revealedTopologies.has(topology);
                 if (stat === undefined || metrics === undefined) return null;
+                if (!revealed) {
+                  return (
+                    <div
+                      key={topology}
+                      data-testid={`arena-part-a-card-${topology}`}
+                      className="rounded-xl border border-dashed border-paper-300 bg-paper-100/50 p-3.5 text-[11.5px] text-ink-500"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-ink-700">{meta.shortLabel}</span>
+                        <Pill tone="plain">待评测…</Pill>
+                      </div>
+                      <div className="mt-1 font-mono text-[10.5px] text-ink-400">{topology}</div>
+                      <p className="mt-3 text-[11px] text-ink-400">等待调度 12 案基准扫描…</p>
+                    </div>
+                  );
+                }
                 return (
                   <div
                     key={topology}
@@ -538,6 +637,13 @@ export function TopologyBenchmarkView(): React.JSX.Element {
                           </div>
                         </td>
                         {ALL_EVAL_TOPOLOGIES.map((topology) => {
+                          if (!revealedTopologies.has(topology)) {
+                            return (
+                              <td key={topology} className="py-2.5 px-2 text-ink-400">
+                                评测中…
+                              </td>
+                            );
+                          }
                           const cell = entry.results[topology];
                           if (cell === undefined) {
                             return (
@@ -621,7 +727,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-paper-200">
-                  {campaignResult.topologies.map((topology) => {
+                  {campaignResult.topologies.filter((topology) => revealedTopologies.has(topology)).map((topology) => {
                     const sum = campaignResult.summary[topology];
                     if (sum === undefined) return null;
                     const meta = TOPOLOGY_META[topology];
@@ -770,7 +876,7 @@ export function TopologyBenchmarkView(): React.JSX.Element {
                         }}
                       />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
-                      {campaignResult.topologies.map((topology) => {
+                      {campaignResult.topologies.filter((topology) => revealedTopologies.has(topology)).map((topology) => {
                         const meta = TOPOLOGY_META[topology];
                         return (
                           <Line
