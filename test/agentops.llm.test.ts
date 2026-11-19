@@ -1,7 +1,10 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
-import type { LlmClient } from "../src/engine/llm/client.js";
+import type { LlmClient, LlmRequest } from "../src/engine/llm/client.js";
+import { openLlmSettingsStore } from "../src/server/llm-settings.js";
+import { createPricingApp } from "../src/server/pricing-app.js";
 import { copyPrompt, validateCopy } from "../src/templates/agentops/llm.js";
+import { prepareIntake } from "../src/templates/agentops/preflight.js";
 import { runAgentWorkflow } from "../src/templates/agentops/runner.js";
 
 const task = "分析拼多多商品是否值得上架。采购价 16 元，快递 6.5 元，竞品主流价 39.90 元，日单量 50，目标毛利 30%。";
@@ -75,5 +78,56 @@ describe("模型节点与验证回退", () => {
     expect(validateCopy("不是 json", 30).ok).toBe(false);
     expect(validateCopy(JSON.stringify({ titles: ["字".repeat(40)], bullets: ["卖点"] }), 30).ok).toBe(false);
     expect(validateCopy(JSON.stringify({ titles: ["正常标题"], bullets: ["卖点"] }), 30).ok).toBe(true);
+  });
+
+  test("模型设置连接测试默认增大 maxTokens 至 64 并禁用 DeepSeek 思考避免截断", async () => {
+    const store = openLlmSettingsStore(null, {});
+    store.save({ enabled: true, baseUrl: "https://api.deepseek.com", model: "deepseek-flash", apiKey: "sk-test" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      expect(payload["max_tokens"]).toBe(64);
+      expect(payload["thinking"]).toEqual({ type: "disabled" });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 8, completion_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    try {
+      const app = createPricingApp({
+        store: { load: () => undefined, list: () => [], save: () => undefined },
+        llmSettings: store,
+      });
+      const res = await app.request("/api/agentops/llm/test", { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ ok: true, detail: "连接成功：deepseek-flash 返回「OK」" });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("资料预检调用模型时禁用思考并要求 JSON 输出", async () => {
+    const captured: LlmRequest[] = [];
+    const client: LlmClient = {
+      async complete(request) {
+        captured.push(request);
+        return {
+          text: JSON.stringify({ questions: [{ id: "buy", ask: "这件商品进货单价是多少？" }] }),
+          usage: { promptTokens: 10, completionTokens: 12 },
+        };
+      },
+    };
+    const prepared = await prepareIntake("商品名：纯棉短袖，竞品价 39.9 元，快递 0 元。", {
+      model: "deepseek-flash",
+      baseUrl: "https://api.deepseek.com",
+      client,
+    });
+    expect(prepared.mode).toBe("live");
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.reasoningEffort).toBe("none");
+    expect(captured[0]?.responseFormat).toBe("json_object");
   });
 });

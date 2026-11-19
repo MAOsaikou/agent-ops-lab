@@ -61,6 +61,7 @@ export async function prepareIntake(task: string, live: LiveLlm | null): Promise
   try {
     const reply = await Promise.race([live.client.complete({
       runId: parseRunId("merchant-intake"), round: 1, nodeId: "intake-questions", attempt: 1, maxTokens: 500,
+      responseFormat: "json_object", reasoningEffort: "none",
       prompt: `你是商家资料助手。只把下面缺失字段的问题改写得自然、简短，不能增删字段或给示例数字，不能填答案或价格。每个 ask 必须是问句，不含数字。严格返回 JSON {"questions":[{"id":"...","ask":"...？"}]}。待改写的问题：${JSON.stringify(base.questions)}`,
     }), new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error("模型提问超时")), 12_000); })]);
     const parsed = wordingSchema.parse(JSON.parse(reply.text));

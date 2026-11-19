@@ -165,7 +165,8 @@ export function openLlmSettingsStore(file: string | null, env: NodeJS.ProcessEnv
           nodeId: "settings",
           attempt: 1,
           prompt: "只回复两个字符：OK",
-          maxTokens: 8,
+          maxTokens: 64,
+          reasoningEffort: "none",
         });
         return { ok: true, detail: `连接成功：${target.model} 返回「${completion.text.trim().slice(0, 20)}」` };
       } catch (error) {

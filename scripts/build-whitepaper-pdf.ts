@@ -15,8 +15,20 @@ import { createPricingApp } from "../src/server/pricing-app.js";
 
 const ROOT = process.cwd();
 const WHITEPAPER_MD = path.join(ROOT, "docs", "proposal-whitepaper.md");
-const OUTPUT_PDF = path.join(ROOT, "docs", "AgentOps-Harness-初赛方案书.pdf");
+const OUTPUT_PDF = path.join(
+  ROOT,
+  "docs",
+  "赛题一+三分拙劲破天下+AgentOps Harness-可信多智能体编排与验证平台.pdf",
+);
 const SHOT_DIR = path.join(ROOT, "artifacts", "whitepaper");
+const REQUIRED_SHOTS = [
+  "01-review-intake.png",
+  "02-review-collaboration.png",
+  "03-simshop-supplycut.png",
+  "04-simshop-pricewar-tamper.png",
+  "05-arena-part-a.png",
+  "06-arena-part-b.png",
+] as const;
 
 const CRAFTED_FLIP_TASK =
   "评估京东商品是否值得上架。商品名：便携保温杯，京东价 ¥58.9，日单量 50，采购价 16 元，包材 1.5 元，快递 6.5 元，目标毛利 56%，推广预算 10 元，可周转资金 2200 元。";
@@ -854,17 +866,62 @@ function markdownToHtml(md: string): { bodyHtml: string; tocHtml: string } {
     out.push(`<p>${renderInlineMarkdown(paraLines.join(" "))}</p>`);
   }
 
+  type TocGroup = {
+    readonly title: { level: number; text: string; id: string };
+    readonly children: { level: number; text: string; id: string }[];
+  };
+
+  const tocGroups: TocGroup[] = [];
+  for (const item of tocItems) {
+    if (item.level === 2 || tocGroups.length === 0) {
+      tocGroups.push({ title: item, children: [] });
+    } else {
+      const lastGroup = tocGroups[tocGroups.length - 1];
+      if (lastGroup) {
+        lastGroup.children.push(item);
+      }
+    }
+  }
+
+  const splitIndex = Math.ceil(tocGroups.length / 2);
+  const leftGroups = tocGroups.slice(0, splitIndex);
+  const rightGroups = tocGroups.slice(splitIndex);
+
+  const renderTocColumn = (groups: readonly TocGroup[]): string =>
+    groups
+      .map(
+        (group) => `
+        <div class="toc-group">
+          <div class="toc-l2"><a href="#${group.title.id}">${renderInlineMarkdown(group.title.text)}</a></div>
+          ${
+            group.children.length > 0
+              ? `<ul class="toc-sublist">${group.children
+                  .map(
+                    (child) =>
+                      `<li class="toc-l3"><a href="#${child.id}">${renderInlineMarkdown(child.text)}</a></li>`,
+                  )
+                  .join("")}</ul>`
+              : ""
+          }
+        </div>`,
+      )
+      .join("\n");
+
   const tocHtml = `
     <section class="toc-page">
       <div class="toc-header">目录</div>
-      <ul class="toc-list">
-        ${tocItems
-          .map(
-            (item) =>
-              `<li class="toc-l${String(item.level)}"><a href="#${item.id}">${renderInlineMarkdown(item.text)}</a></li>`,
-          )
-          .join("\n")}
-      </ul>
+      <div class="toc-grid">
+        <div class="toc-col">${renderTocColumn(leftGroups)}</div>
+        <div class="toc-col">${renderTocColumn(rightGroups)}</div>
+      </div>
+      <div class="toc-pillars">
+        <span class="toc-pillar-label">项目白皮书五维覆盖</span>
+        <span class="toc-pillar-chip">1. 项目概述（第1章）</span>
+        <span class="toc-pillar-chip">2. 解决方案（第2–6、8章）</span>
+        <span class="toc-pillar-chip">3. 应用成效（第7章）</span>
+        <span class="toc-pillar-chip">4. 商业模式（第9章）</span>
+        <span class="toc-pillar-chip">5. 团队介绍（第10章）</span>
+      </div>
     </section>`;
 
   return { bodyHtml: out.join("\n"), tocHtml };
@@ -876,7 +933,7 @@ function buildHtmlDocument(mdContent: string): string {
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <title>AgentOps Harness：可信多智能体编排与验证平台技术方案书</title>
+  <title>AgentOps Harness：可信多智能体编排与验证平台项目白皮书（技术方案书）</title>
   <style>
     @page {
       size: A4;
@@ -900,7 +957,7 @@ function buildHtmlDocument(mdContent: string): string {
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: 18mm 14mm;
+      padding: 15mm 14mm;
       background: #fdfbf5;
       border: 2px solid #201c16;
       border-radius: 6px;
@@ -910,47 +967,70 @@ function buildHtmlDocument(mdContent: string): string {
       display: inline-block;
       background: #c4442b;
       color: #ffffff;
-      font-size: 10pt;
+      font-size: 9.8pt;
       font-weight: 700;
       padding: 5px 14px;
       border-radius: 4px;
-      letter-spacing: 0.6px;
+      letter-spacing: 0.5px;
     }
     .cover-title {
-      margin-top: 22mm;
+      margin-top: 12mm;
       font-family: "Georgia", "SimSun", "Microsoft YaHei", serif;
-      font-size: 26pt;
+      font-size: 25pt;
       font-weight: 800;
       line-height: 1.3;
       color: #201c16;
     }
     .cover-subtitle {
-      margin-top: 8mm;
-      font-size: 12.5pt;
-      line-height: 1.6;
+      margin-top: 6mm;
+      font-size: 12pt;
+      line-height: 1.55;
       color: #4f463b;
       border-left: 4px solid #2e6b52;
       padding-left: 12px;
+    }
+    .cover-team-card {
+      margin-top: 8mm;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 7px 14px;
+      background: #ffffff;
+      border: 1px solid #d5cbb8;
+      border-left: 4px solid #c4442b;
+      border-radius: 6px;
+      padding: 9px 14px;
+      font-size: 9.3pt;
+      color: #201c16;
+    }
+    .cover-team-item {
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+    .cover-team-label {
+      color: #6b6052;
+      font-weight: 700;
+      white-space: nowrap;
     }
     .cover-kpis {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
       gap: 10px;
-      margin-top: 18mm;
+      margin-top: 9mm;
     }
     .kpi-card {
       background: #f7f2e7;
       border: 1px solid #d5cbb8;
       border-radius: 6px;
-      padding: 10px 14px;
+      padding: 9px 13px;
     }
-    .kpi-label { font-size: 8.8pt; color: #6b6052; }
-    .kpi-val { font-size: 14pt; font-weight: 800; color: #201c16; margin-top: 3px; }
-    .kpi-sub { font-size: 8.5pt; color: #2e6b52; margin-top: 2px; }
+    .kpi-label { font-size: 8.6pt; color: #6b6052; }
+    .kpi-val { font-size: 13.5pt; font-weight: 800; color: #201c16; margin-top: 2px; }
+    .kpi-sub { font-size: 8.3pt; color: #2e6b52; margin-top: 2px; }
     .cover-meta {
       border-top: 1.5px solid #d5cbb8;
-      padding-top: 10px;
-      font-size: 9.5pt;
+      padding-top: 9px;
+      font-size: 9.2pt;
       color: #4f463b;
       display: flex;
       justify-content: space-between;
@@ -959,36 +1039,84 @@ function buildHtmlDocument(mdContent: string): string {
     /* TOC Page */
     .toc-page {
       page-break-after: always;
-      padding: 2mm 2mm;
+      padding: 1mm 2mm;
     }
     .toc-header {
-      font-size: 16pt;
+      font-size: 15.5pt;
       font-weight: 800;
       color: #201c16;
       border-bottom: 2px solid #c4442b;
       padding-bottom: 5px;
       margin-bottom: 10px;
     }
-    .toc-list {
-      list-style: none;
-      padding: 0;
-      margin: 0;
+    .toc-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 18px;
+      align-items: start;
     }
-    .toc-list li { margin: 2.5px 0; line-height: 1.38; }
-    .toc-list a {
+    .toc-col {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .toc-group {
+      break-inside: avoid;
+      background: #fdfbf5;
+      border: 1px solid #e6decb;
+      border-radius: 5px;
+      padding: 5px 8px;
+    }
+    .toc-group a {
       text-decoration: none;
       color: #201c16;
     }
     .toc-l2 {
       font-weight: 700;
-      font-size: 10.2pt;
-      margin-top: 7px !important;
+      font-size: 9.3pt;
+      line-height: 1.32;
       color: #201c16;
     }
+    .toc-sublist {
+      list-style: none;
+      padding: 0;
+      margin: 3px 0 0;
+    }
     .toc-l3 {
-      padding-left: 16px;
-      font-size: 9.1pt;
+      padding-left: 10px;
+      margin: 1.5px 0;
+      font-size: 8.1pt;
+      line-height: 1.28;
       color: #4f463b;
+    }
+    .toc-l3 a {
+      color: #4f463b;
+    }
+    .toc-pillars {
+      margin-top: 10px;
+      padding: 7px 10px;
+      background: #f7f2e7;
+      border: 1px solid #d5cbb8;
+      border-radius: 5px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      break-inside: avoid;
+    }
+    .toc-pillar-label {
+      font-size: 8.4pt;
+      font-weight: 700;
+      color: #c4442b;
+      margin-right: 4px;
+    }
+    .toc-pillar-chip {
+      font-size: 8pt;
+      background: #ffffff;
+      border: 1px solid #d5cbb8;
+      border-radius: 4px;
+      padding: 2px 6px;
+      color: #201c16;
     }
 
     /* Content Typography */
@@ -1182,11 +1310,29 @@ function buildHtmlDocument(mdContent: string): string {
 <body>
   <section class="cover-page">
     <div>
-      <span class="cover-badge">第五届「未来杯」AI 挑战赛 · 赛题一「Agent 编排创新应用」初赛方案书</span>
+      <span class="cover-badge">第五届「未来杯」AI 挑战赛 · 赛题一「Agent 编排创新应用」项目白皮书</span>
       <h1 class="cover-title">AgentOps Harness：<br/>可信多智能体编排与验证平台</h1>
       <div class="cover-subtitle">
         自研事件溯源编排内核 · 动态能力调度 · 闭环对抗质询 · 防篡改 SHA-256 账本<br/>
         演示载体：单品多维会签台 × SimShop 8 回合市场博弈 × 4 拓扑公平评测竞技场
+      </div>
+      <div class="cover-team-card">
+        <div class="cover-team-item">
+          <span class="cover-team-label">参赛队伍：</span>
+          <span>三分拙劲破天下</span>
+        </div>
+        <div class="cover-team-item">
+          <span class="cover-team-label">所属院校：</span>
+          <span>岭南师范学院</span>
+        </div>
+        <div class="cover-team-item">
+          <span class="cover-team-label">核心成员：</span>
+          <span>冯茂盛、陈子浩、丁泓江</span>
+        </div>
+        <div class="cover-team-item">
+          <span class="cover-team-label">指导教师：</span>
+          <span>无</span>
+        </div>
       </div>
       <div class="cover-kpis">
         <div class="kpi-card">
@@ -1213,7 +1359,7 @@ function buildHtmlDocument(mdContent: string): string {
     </div>
     <div class="cover-meta">
       <span>项目工程：<code>agent-ops-lab</code>（Node.js 22 + TypeScript + Hono + SQLite + React）</span>
-      <span>文档版本：初赛正式版 · 2026-11-17</span>
+      <span>文档版本：初赛完整版（方案书 + 白皮书融合） · 2026-11-19</span>
     </div>
   </section>
 
@@ -1245,7 +1391,7 @@ async function renderPdf(html: string): Promise<void> {
         right: "16mm",
       },
       headerTemplate:
-        '<div style="width:100%;font-size:8px;color:#6b6052;padding:0 16mm;display:flex;justify-content:space-between;font-family:sans-serif;"><span>AgentOps Harness · 可信多智能体编排与验证平台技术方案书</span><span>第五届「未来杯」赛题一初赛白皮书</span></div>',
+        '<div style="width:100%;font-size:8px;color:#6b6052;padding:0 16mm;display:flex;justify-content:space-between;font-family:sans-serif;"><span>AgentOps Harness · 可信多智能体编排与验证平台（项目白皮书 / 技术方案书）</span><span>赛题一 · 三分拙劲破天下（岭南师范学院）</span></div>',
       footerTemplate:
         '<div style="width:100%;font-size:8px;color:#6b6052;padding:0 16mm;display:flex;justify-content:space-between;font-family:sans-serif;"><span>数据来源：agent-ops-lab 实测运行与冻结基准评测</span><span>第 <span class="pageNumber"></span> 页 / 共 <span class="totalPages"></span> 页</span></div>',
     });
@@ -1256,8 +1402,14 @@ async function renderPdf(html: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  process.stdout.write("[1/3] 正在启动隔离服务并采集 6 张最新高清系统截图...\n");
-  await captureScreenshots();
+  const reuseShots = process.argv.includes("--reuse-screenshots");
+  const allShotsReady = REQUIRED_SHOTS.every((name) => existsSync(path.join(SHOT_DIR, name)));
+  if (reuseShots && allShotsReady) {
+    process.stdout.write("[1/3] 检测到 --reuse-screenshots 且 6 张高清系统截图已就绪，跳过重拍。\n");
+  } else {
+    process.stdout.write("[1/3] 正在启动隔离服务并采集 6 张最新高清系统截图...\n");
+    await captureScreenshots();
+  }
 
   process.stdout.write("[2/3] 正在读取方案书 Markdown 并排版生成离线矢量图与 PDF 视图...\n");
   const md = readFileSync(WHITEPAPER_MD, "utf8");
