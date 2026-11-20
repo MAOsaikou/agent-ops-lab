@@ -1358,7 +1358,7 @@ function buildHtmlDocument(mdContent: string): string {
       </div>
     </div>
     <div class="cover-meta">
-      <span>项目工程：<code>agent-ops-lab</code>（Node.js 22 + TypeScript + Hono + SQLite + React）</span>
+      <span>开源复现仓库：<code>https://github.com/MAOsaikou/agent-ops-lab</code>（Node.js 22 + TypeScript + Hono + SQLite + React）</span>
       <span>文档版本：初赛完整版（方案书 + 白皮书融合） · 2026-11-19</span>
     </div>
   </section>

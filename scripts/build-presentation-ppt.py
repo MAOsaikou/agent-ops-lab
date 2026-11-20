@@ -1034,6 +1034,15 @@ def build_deck() -> None:
     r14_2.text = "Thanks"
     apply_font(r14_2, size_pt=32, bold=True, color=None, scheme_val="bg1")
 
+    tb14_repo = s14.shapes.add_textbox(Inches(2.16), Inches(4.85), Inches(9.00), Inches(0.65))
+    tf14_repo = tb14_repo.text_frame
+    tf14_repo.word_wrap = True
+    p14_repo = tf14_repo.paragraphs[0]
+    p14_repo.alignment = PP_ALIGN.CENTER
+    r14_repo = p14_repo.add_run()
+    r14_repo.text = "开源复现仓库：https://github.com/MAOsaikou/agent-ops-lab"
+    apply_font(r14_repo, size_pt=18, bold=True, color=None, scheme_val="bg1")
+
     OUTPUT_PPTX.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(OUTPUT_PPTX))
     print(f"Generated from template: {OUTPUT_PPTX} ({len(prs.slides)} slides)")

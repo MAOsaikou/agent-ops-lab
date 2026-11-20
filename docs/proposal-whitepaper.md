@@ -2,7 +2,7 @@
 
 > **竞赛与赛题**：第五届「未来杯」AI 挑战赛 · 赛题一「Agent 编排创新应用」
 > **参赛队伍**：三分拙劲破天下（岭南师范学院）｜**核心成员**：冯茂盛、陈子浩、丁泓江｜**指导教师**：无
-> **项目名称**：AgentOps Harness（代码仓库：`agent-ops-lab`）
+> **项目名称**：AgentOps Harness（开源复现仓库：`https://github.com/MAOsaikou/agent-ops-lab`）
 > **提交命名格式**：`赛题一+三分拙劲破天下+AgentOps Harness-可信多智能体编排与验证平台`
 > **核心定位**：面向复杂行业决策场景的**可复用事件溯源多智能体编排、动态调度、对抗验证与防篡改审计平台**
 > **演示场景**：电商全链路经营决策闭环（**1. 单品多维会签台** × **2. SimShop 8 回合动态市场与供应链博弈** × **3. 4 拓扑公平对照评测竞技场**）
@@ -787,3 +787,13 @@ function finishCommit(event: StoredEvent, runId: RunId, round: number, decisionH
 1. **硬核底层自研能力**：团队具备从零设计事件溯源存储（SQLite WAL）、声明式工作流执行器、SemVer 版本调度、五重终止 Self-Loop 与幂等提交状态机的底层能力，`src/engine/` 零业务模板依赖。
 2. **严密防作弊与科学实证**：针对回滚窥视、随机流泄漏、预算不公与数字幻觉问题，落地 `L1~L8` 防线、整数「分」精度、`fast-check` 性质测试、4 拓扑公平消融与 `HTTP 409` 防篡改交互。
 3. **高标准全栈交付体验**：兼顾高并发后台引擎（`32,555 events/s`）与一线可用性，通过纸质台账视觉、大白话导览横幅、`320px` 窄屏零溢出及自动化白皮书/PPT 管线，完成从内核到演示产品的闭环。
+
+### 10.4 可运行代码仓库与评审专家快速复现说明
+
+- **公开源码仓库（GitHub `main` 分支，MIT 协议）**：`https://github.com/MAOsaikou/agent-ops-lab`
+- **提交包离线完整源码目录**：`./源码/`（与公开 GitHub 仓库核心代码完全一致）
+- **三步零密钥启动演示**（环境要求：`Node.js >= 22`、`pnpm >= 10`）：
+  1. `git clone https://github.com/MAOsaikou/agent-ops-lab.git && cd agent-ops-lab`（或直接进入压缩包内 `./源码/` 目录）
+  2. `pnpm install`
+  3. `pnpm dev` → 浏览器打开 `http://127.0.0.1:47322`（后端服务：`http://127.0.0.1:47321`），无需填写任何 API Key 即可复现单品多维会签、SimShop 8 回合断供/价格战博弈（含 HTTP 409 防篡改检验）与 4 拓扑评测竞技场。
+- **全量自动化验证复现**：执行 `pnpm lint && pnpm typecheck && pnpm test` 运行静态门禁与 434 项测试；关闭同端口开发服务后执行 `pnpm e2e` 可自动拉起隔离环境跑通全部 41 项浏览器端到端场景。
